@@ -46,7 +46,7 @@ pip install -r requirements.txt
 - Python ≥ 3.10
 - PyTorch ≥ 2.1.0
 - CUDA 11.8+ (for GPU training)
-- 12GB+ GPU memory (tested on RTX 3060, A100)
+- GPU memory scales with caption length: short-caption datasets (e.g. LLaVA-Pretrain) are light, while the astronomy Stage-1 run (long captions + QA, batch 8) measured **~38 GB** on an RTX 6000 Ada — see [Trained Model: AstroLLaVA Stage-1](#trained-model-astrollava-stage-1-astronomy)
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ Edit `configs/pretrain_stage1.yaml`:
 
 ```yaml
 data:
-  train_data_path: "/path/to/blip_laion_cc_sbu_558k.json"  # or your dataset
+  train_data_path: "/path/to/train.json"  # your LLaVA-format dataset
   image_dir: "/path/to/images"
   max_length: 2048
 
@@ -143,16 +143,15 @@ vlm/
 | Warmup | 3% of steps | Short warmup; model components are pre-trained |
 | Schedule | Cosine decay | Smooth convergence to near-zero lr |
 | Precision | bf16 | Mixed precision for efficiency |
-| Epochs | 1 | Single pass over 558K samples (if using LLaVA-Pretrain) |
+| Epochs | 1 | Single pass over the pretraining set (LLaVA Stage-1 convention) |
 
 ## Performance & Memory
 
 **Trainable Parameters**: ~3.9M (only the MLP connector)
 **Frozen Parameters**: ~1.8B (CLIP + LLM)
-**GPU Memory**: ~6–8 GB (with batch_size=8, bf16 precision)
+**GPU Memory**: ~6–8 GB (batch_size=8, bf16) for short-caption datasets like LLaVA-Pretrain. Memory scales with sequence length: the astronomy Stage-1 run (long captions + QA, `max_length 512`) measured **~38 GB at batch_size=8** on an RTX 6000 Ada — plan on a 40 GB+ GPU at that batch, or a smaller batch / shorter `max_length` on 24 GB.
 
-Expected training time on a single RTX 3060 (12GB) for 558K samples:
-- ~3 days at batch_size=8 with gradient_accumulation=32
+For measured throughput and training time on real data, see [Trained Model: AstroLLaVA Stage-1](#trained-model-astrollava-stage-1-astronomy) (~26 samples/s on an RTX 6000 Ada).
 
 ## What Gets Trained
 
@@ -366,7 +365,7 @@ meaningful generations.
 
 ### Running the real experiment on a GPU
 
-A CUDA box (e.g. RTX 3060) is recommended; the first run downloads the encoder/LLM/NLI
+A CUDA GPU is recommended; the first run downloads the encoder/LLM/NLI
 weights (~7 GB total) and caches them. Datasets and the corpus **stream and are capped**, so
 only what's needed downloads.
 
