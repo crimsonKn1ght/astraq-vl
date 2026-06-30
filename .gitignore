@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+checkpoints/
+datasets/llava_recap_558k/
+
+# Generated RAG artifacts: downloaded/cached images, FAISS/BM25 indexes, eval outputs
+data/corpus/
+data/corpus_astro/
+rag_cache/
+rag_index/
+rag_index_astro/
+rag_results/
+rag_results_astro/
