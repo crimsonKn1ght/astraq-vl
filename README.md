@@ -359,7 +359,7 @@ python inference.py \
 | Max length | 512 (+256 image tokens) |
 | Precision | bf16 (autocast) + gradient checkpointing |
 | Hardware | 1× RTX 6000 Ada (48 GB), ~15 samples/s (~3 h) |
-| Loss | began ~1.47 (= the Stage-1 warm-start, since LoRA initializes as a no-op); final value in `checkpoint-2526/meta.json` |
+| Held-out loss | 1.60 → **1.452** (monotonic), recomputed per checkpoint on 512 held-out samples via [`scripts/eval_loss_curve.py`](scripts/eval_loss_curve.py); plateaus by end of epoch |
 
 ### Train
 

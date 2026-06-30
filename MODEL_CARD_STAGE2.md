@@ -76,12 +76,31 @@ image ─► CLIP ViT-L/14 (FROZEN) ─► MLP connector (TRAINED, init from Sta
 | Max length | 512 (+256 image tokens) |
 | Precision | bf16 (autocast) + gradient checkpointing |
 | Hardware | 1× RTX 6000 Ada (48 GB), ~15 samples/s (~3 h) |
-| Loss | began ~1.47 (equal to the Stage-1 warm-start, since LoRA initializes as a no-op); final value in `checkpoint-2526/meta.json` |
+| Held-out loss | 1.60 (step 200) → **1.452** (step 2526), decreasing monotonically — see Training curve below |
 
 The full-LLM backward pass (absent in Stage-1) is the memory driver, hence per-device batch 4 +
 gradient checkpointing to fit ~48 GB. One epoch is the LLaVA instruction-tuning convention — the
 model only needs to learn to *use* the already-aligned visual features, not to align them from
 scratch.
+
+## Training curve
+
+Held-out validation loss, recomputed per checkpoint on a fixed 512-sample subset of the unseen
+`test.json` and averaged over its answer tokens. (The per-step training log wasn't retained, so this
+was reconstructed from the saved checkpoints with `scripts/eval_loss_curve.py` — which makes it a
+true held-out curve rather than a noisy train-loss trace.) It falls monotonically and flattens by the
+end of the single epoch, consistent with the 1-epoch choice:
+
+| step | 200 | 400 | 600 | 800 | 1000 | 1200 | 1400 | 1600 | 1800 | 2000 | 2200 | 2400 | 2526 |
+|------|----:|----:|----:|----:|-----:|-----:|-----:|-----:|-----:|-----:|-----:|-----:|-----:|
+| held-out loss | 1.605 | 1.571 | 1.548 | 1.526 | 1.508 | 1.494 | 1.479 | 1.471 | 1.462 | 1.456 | 1.454 | 1.452 | **1.452** |
+
+![AstroLLaVA Stage-2 held-out loss curve](eval_loss_curve.png)
+
+Regenerate with `python scripts/eval_loss_curve.py --config configs/finetune_astrollava_stage2.yaml
+--checkpoint-dir checkpoints/astrollava-stage2 --records-json datasets/astrollava_llava/test.json
+--image-dir datasets/astrollava_llava/images --num-samples 512 --plot` (full series in
+`eval_loss_curve.csv`).
 
 ## Usage
 
