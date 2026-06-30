@@ -109,8 +109,9 @@ memorization.
 **What it doesn't** — it **hallucinates fine details** (exact catalog numbers, telescopes, dates,
 distances), filling specifics from the frozen LLM's prior rather than the pixels. This is the
 expected Stage-1 ceiling: the connector supplies a coarse visual category and the frozen LLM
-improvises the rest. For factual specificity, a **Stage-2 fine-tune** (unfreezing the LLM, e.g. via
-LoRA, on the QA pairs) is the next step — more Stage-1 epochs do not fix it.
+improvises the rest. For factual specificity, a **Stage-2 fine-tune** (unfreezing the LLM via LoRA
+on the QA pairs) is the fix — more Stage-1 epochs do not help. That model is now released at
+[`grKnight/astrollava-stage2`](https://huggingface.co/grKnight/astrollava-stage2).
 
 The held-out comparison above is a **qualitative spot check** on a few samples, not a full
 quantitative benchmark.

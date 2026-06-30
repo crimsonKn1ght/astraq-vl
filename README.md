@@ -1,6 +1,6 @@
-# Vision-Language Model (VLM) - Stage 1 Feature Alignment
+# Vision-Language Model (VLM) — Stage 1 Alignment + Stage 2 Instruction Tuning
 
-A minimal, efficient implementation of a Vision-Language Model following the LLaVA architecture. This project trains only a lightweight MLP connector to align frozen CLIP vision features with a frozen LLM, achieving effective multimodal understanding with minimal computational cost.
+A minimal, efficient implementation of a Vision-Language Model following the LLaVA architecture. **Stage 1** trains only a lightweight MLP connector to align frozen CLIP vision features with a frozen LLM. **Stage 2** then warm-starts that connector and fine-tunes the LLM with LoRA adapters on instruction (QA) data — closing the gap between coarse grounding and factual specificity, at minimal computational cost.
 
 ## Overview
 
@@ -11,14 +11,16 @@ This implementation bridges a frozen CLIP vision encoder (`openai/clip-vit-large
 - **Efficiency**: Frozen models save memory; only train the connector
 - **Proven approach**: Follows LLaVA Stage 1 alignment, a well-validated recipe
 
-> A connector trained with this codebase on astronomy image–text data is released at
-> [`grKnight/astrollava-stage1`](https://huggingface.co/grKnight/astrollava-stage1).
-> See [Trained Model: AstroLLaVA Stage-1](#trained-model-astrollava-stage-1-astronomy) for the
-> dataset, training, testing, and download details.
+> Models trained with this codebase on astronomy image–text data are released on the Hub:
+> **Stage 1** (connector) at [`grKnight/astrollava-stage1`](https://huggingface.co/grKnight/astrollava-stage1)
+> and **Stage 2** (connector + LoRA) at [`grKnight/astrollava-stage2`](https://huggingface.co/grKnight/astrollava-stage2).
+> See [Trained Model: AstroLLaVA Stage-1](#trained-model-astrollava-stage-1-astronomy) and
+> [Stage 2: Visual Instruction Tuning (LoRA)](#stage-2-visual-instruction-tuning-lora) for dataset,
+> training, testing, and download details.
 
 ## Architecture
 
-![AstroLLaVA Stage-1 architecture](docs/diagrams/model_architecture.svg)
+![AstroLLaVA Stage-2 architecture](docs/diagrams/model_architecture.svg)
 
 ```
 Image (3, 224, 224)
@@ -238,8 +240,6 @@ python scripts/build_astrollava_trainset.py \
 
 ### Training
 
-![AstroLLaVA Stage-1 training flow](docs/diagrams/training_flow.svg)
-
 Config: `configs/pretrain_astrollava.yaml`; run `python train.py --config configs/pretrain_astrollava.yaml`.
 
 | Setting | Value |
@@ -252,13 +252,7 @@ Config: `configs/pretrain_astrollava.yaml`; run `python train.py --config config
 | Precision | bf16 |
 | Hardware | 1× RTX 6000 Ada (48 GB) |
 | Throughput / memory | ~26 samples/s, ~38 GB VRAM |
-| Loss | 2.08 → 1.56 (10-step running avg; min ~1.49 @ step 2780) |
-
-![AstroLLaVA Stage-1 training loss](stage1_training_curve.png)
-
-*Training loss (10-step running average) over 3 epochs / 3,786 steps, parsed from the training
-console log with [`scripts/plot_training_curve.py`](scripts/plot_training_curve.py): 2.08 → 1.56,
-dipping to ~1.49 mid-epoch-3.*
+| Loss | ~2.08 → ~1.50 |
 
 The connector is checkpointed every 100 steps: `checkpoint-1300` ≈ epoch 1, `checkpoint-2500` ≈
 epoch 2, `checkpoint-3789` = final. A RunPod workflow for the full setup → build (with the held-out
@@ -309,6 +303,130 @@ Each bundle includes a `REPRODUCE.md` pinning the code commit, base models, the 
 command (with `--test-fraction 0.02 --seed 42`), the training command, and package versions
 (`torch 2.8.0+cu128`, `transformers 5.12.1`). The split is seeded, so the same build reproduces the
 exact train/test partition.
+
+## Stage 2: Visual Instruction Tuning (LoRA)
+
+Stage 1 trains only the connector, so it grounds *coarse* visual structure but **hallucinates fine
+specifics** (catalog numbers, instruments, dates, distances) — the frozen LLM fills those from its
+prior. **Stage 2** addresses that ceiling: it warm-starts the Stage-1 connector and keeps training
+it **while fine-tuning the Qwen LLM with LoRA adapters** on the same caption + QA data. The vision
+encoder stays frozen.
+
+```
+image ─► CLIP ViT-L/14 (FROZEN) ─► MLP connector (TRAINED, init from Stage-1) ─► Qwen2.5-1.5B + LoRA (base FROZEN, LoRA TRAINED) ─► text
+```
+
+LoRA needs one extra dependency (already in `requirements.txt`):
+
+```bash
+pip install peft
+```
+
+### Released weights
+
+The Stage-2 model trained with this codebase is published on the Hugging Face Hub:
+
+**https://huggingface.co/grKnight/astrollava-stage2**
+
+A single bundle
+[`astrollava-stage2.zip`](https://huggingface.co/grKnight/astrollava-stage2/blob/main/astrollava-stage2.zip)
+holds the final checkpoint (`checkpoint-2526`: `connector.safetensors` **+** `lora/adapter_model.safetensors`
+& `adapter_config.json`), the **held-out** predictions (`predictions_test_stage2.jsonl`), the training
+config, the `test.json` split, and a `REPRODUCE.md`. Like Stage-1 it is **not** a standalone
+`transformers` model — it needs this repo's code, the two base models (auto-downloaded), and `peft`.
+
+```bash
+# download + unzip
+hf download grKnight/astrollava-stage2 astrollava-stage2.zip --local-dir .
+unzip astrollava-stage2.zip -d ckpt2
+
+# answer a question about an image (CLIP + Qwen auto-download; peft loads the LoRA adapter)
+python inference.py \
+  --config ckpt2/finetune_astrollava_stage2.yaml \
+  --checkpoint ckpt2/checkpoint-2526 \
+  --image your_astro_image.jpg \
+  --prompt "What type of object is this and what is notable about it?" \
+  --temperature 0
+```
+
+| | |
+|---|---|
+| Trainable / total params | 22,400,000 / 1,868,879,360 (1.20%) |
+| — connector (warm-started from Stage-1 `checkpoint-3789`) | 3,935,232 |
+| — LoRA (`r=16`, `α=32`, `dropout=0.05`; `q/k/v/o/gate/up/down_proj` × 28 layers) | 18,464,768 |
+| Data | same as Stage-1: train 161,653 recs / 29,151 imgs; held-out test 591 imgs / 3,271 recs |
+| Epochs / steps | 1 epoch, 2,526 update steps |
+| Effective batch | 64 (per-device 4 × grad-accum 16) |
+| LR / schedule | 2e-4, cosine, 3% warmup (75 steps) |
+| Max length | 512 (+256 image tokens) |
+| Precision | bf16 (autocast) + gradient checkpointing |
+| Hardware | 1× RTX 6000 Ada (48 GB), ~15 samples/s (~3 h) |
+| Held-out loss | 1.60 → **1.452** (monotonic), recomputed per checkpoint on 512 held-out samples via [`scripts/eval_loss_curve.py`](scripts/eval_loss_curve.py); plateaus by end of epoch |
+
+![AstroLLaVA Stage-2 held-out loss curve](eval_loss_curve.png)
+
+*Held-out validation loss per checkpoint (recomputed from the saved checkpoints on 512 unseen
+`test.json` samples — the dense per-step training log wasn't retained). Monotonic 1.60 → 1.45,
+flattening by the end of the single epoch.*
+
+### Train
+
+![AstroLLaVA Stage-2 training flow](docs/diagrams/training_flow.svg)
+
+Reuse the **same** `train.json` / `images/` from the Stage-1 build (caption + QA, with the held-out
+`test.json`). Point `stage1_checkpoint` at a trained Stage-1 connector (your own
+`checkpoints/astrollava-stage1/checkpoint-3789`, or the released `grKnight/astrollava-stage1`
+bundle), then:
+
+```bash
+python train.py --config configs/finetune_astrollava_stage2.yaml
+```
+
+| Setting | Value | Rationale |
+|---------|-------|-----------|
+| Trainable | connector (~3.9M) + LoRA adapters | base LLM + vision stay frozen |
+| LoRA | `r=16`, `alpha=32`, `dropout=0.05`, targets `q/k/v/o/gate/up/down_proj` | standard Qwen2.5 LoRA set |
+| Stage | `stage: 2` | switches the trainer to connector+LoRA and keeps the LLM in `train()` |
+| Epochs | 1 | instruction-tuning convention |
+| Effective batch | 64 (per-device 4 × grad-accum 16) | |
+| Gradient checkpointing | `true` | **required** to fit the LLM backward pass in ~48 GB |
+| Learning rate | 2e-4, cosine, 3% warmup | LoRA + connector (optional `connector_lr` for a split LR) |
+| Precision | bf16 | |
+
+**Memory:** Stage 1 was ~38 GB at batch 8 with *no* LLM gradients. Stage 2 adds the full-LLM
+backward pass, so it uses `per_device_batch_size: 4` + gradient checkpointing. If it still OOMs on
+48 GB, drop the batch to 2 and raise `gradient_accumulation_steps` to 32 (effective batch
+unchanged).
+
+Each Stage-2 checkpoint dir holds the continued-trained `connector.safetensors` **and** a
+`lora/adapter_model.safetensors` (+ `adapter_config.json`). Stage-1 checkpoint dirs are unchanged
+(no `lora/`), so they still load as before.
+
+### Inference / held-out eval
+
+Pass the Stage-2 **config** (so the LoRA modules are built) and a Stage-2 checkpoint; the loader
+restores both the connector and the LoRA adapter automatically:
+
+```bash
+python inference.py \
+  --config configs/finetune_astrollava_stage2.yaml \
+  --checkpoint checkpoints/astrollava-stage2/checkpoint-2526 \
+  --image your_astro_image.jpg \
+  --prompt "What type of object is this and what is notable about it?" \
+  --temperature 0
+
+# Held-out comparison vs Stage-1 on the SAME unseen images:
+python scripts/batch_inference.py \
+  --config configs/finetune_astrollava_stage2.yaml \
+  --checkpoint checkpoints/astrollava-stage2/checkpoint-2526 \
+  --image-dir datasets/astrollava_llava/images \
+  --records-json datasets/astrollava_llava/test.json \
+  --num-samples 0 --temperature 0 --output predictions_test_stage2.jsonl
+```
+
+Diff `predictions_test_stage2.jsonl` against the published Stage-1 `predictions_test_ep3.jsonl`: the
+Stage-2 hypothesis is fewer hallucinated specifics on the QA prompts, since the LLM (not just the
+connector) now learns from the images.
 
 ## Medical RAG Layer (Retrieval-Augmented Grounding)
 
@@ -440,9 +558,11 @@ prototype.
 
 ## Next Steps
 
-This implementation covers **Stage 1: Feature Alignment**. Future extensions might include:
+This implementation covers **Stage 1: Feature Alignment** and **Stage 2: Visual Instruction Tuning
+(LoRA)** (see [Stage 2: Visual Instruction Tuning (LoRA)](#stage-2-visual-instruction-tuning-lora)).
+Further extensions might include:
 
-1. **Stage 2: Full Model Tuning** — Unfreeze LLM layers and fine-tune on instruction-following data
+1. **Full Model Tuning** — Unfreeze all LLM layers (instead of LoRA) for more capacity at higher VRAM cost
 2. **Cross-Attention Connector** — Replace MLP with a learned cross-attention mechanism for better spatial reasoning
 3. **Higher-Resolution Images** — Support variable image resolutions and dynamic patching
 4. **Multi-Image Support** — Handle multiple images per prompt
