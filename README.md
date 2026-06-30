@@ -1,6 +1,6 @@
-# Vision-Language Model (VLM) - Stage 1 Feature Alignment
+# Vision-Language Model (VLM) — Stage 1 Alignment + Stage 2 Instruction Tuning
 
-A minimal, efficient implementation of a Vision-Language Model following the LLaVA architecture. This project trains only a lightweight MLP connector to align frozen CLIP vision features with a frozen LLM, achieving effective multimodal understanding with minimal computational cost.
+A minimal, efficient implementation of a Vision-Language Model following the LLaVA architecture. **Stage 1** trains only a lightweight MLP connector to align frozen CLIP vision features with a frozen LLM. **Stage 2** then warm-starts that connector and fine-tunes the LLM with LoRA adapters on instruction (QA) data — closing the gap between coarse grounding and factual specificity, at minimal computational cost.
 
 ## Overview
 
@@ -11,10 +11,12 @@ This implementation bridges a frozen CLIP vision encoder (`openai/clip-vit-large
 - **Efficiency**: Frozen models save memory; only train the connector
 - **Proven approach**: Follows LLaVA Stage 1 alignment, a well-validated recipe
 
-> A connector trained with this codebase on astronomy image–text data is released at
-> [`grKnight/astrollava-stage1`](https://huggingface.co/grKnight/astrollava-stage1).
-> See [Trained Model: AstroLLaVA Stage-1](#trained-model-astrollava-stage-1-astronomy) for the
-> dataset, training, testing, and download details.
+> Models trained with this codebase on astronomy image–text data are released on the Hub:
+> **Stage 1** (connector) at [`grKnight/astrollava-stage1`](https://huggingface.co/grKnight/astrollava-stage1)
+> and **Stage 2** (connector + LoRA) at [`grKnight/astrollava-stage2`](https://huggingface.co/grKnight/astrollava-stage2).
+> See [Trained Model: AstroLLaVA Stage-1](#trained-model-astrollava-stage-1-astronomy) and
+> [Stage 2: Visual Instruction Tuning (LoRA)](#stage-2-visual-instruction-tuning-lora) for dataset,
+> training, testing, and download details.
 
 ## Architecture
 
@@ -318,6 +320,47 @@ LoRA needs one extra dependency (already in `requirements.txt`):
 pip install peft
 ```
 
+### Released weights
+
+The Stage-2 model trained with this codebase is published on the Hugging Face Hub:
+
+**https://huggingface.co/grKnight/astrollava-stage2**
+
+A single bundle
+[`astrollava-stage2.zip`](https://huggingface.co/grKnight/astrollava-stage2/blob/main/astrollava-stage2.zip)
+holds the final checkpoint (`checkpoint-2526`: `connector.safetensors` **+** `lora/adapter_model.safetensors`
+& `adapter_config.json`), the **held-out** predictions (`predictions_test_stage2.jsonl`), the training
+config, the `test.json` split, and a `REPRODUCE.md`. Like Stage-1 it is **not** a standalone
+`transformers` model — it needs this repo's code, the two base models (auto-downloaded), and `peft`.
+
+```bash
+# download + unzip
+hf download grKnight/astrollava-stage2 astrollava-stage2.zip --local-dir .
+unzip astrollava-stage2.zip -d ckpt2
+
+# answer a question about an image (CLIP + Qwen auto-download; peft loads the LoRA adapter)
+python inference.py \
+  --config ckpt2/finetune_astrollava_stage2.yaml \
+  --checkpoint ckpt2/checkpoint-2526 \
+  --image your_astro_image.jpg \
+  --prompt "What type of object is this and what is notable about it?" \
+  --temperature 0
+```
+
+| | |
+|---|---|
+| Trainable / total params | 22,400,000 / 1,868,879,360 (1.20%) |
+| — connector (warm-started from Stage-1 `checkpoint-3789`) | 3,935,232 |
+| — LoRA (`r=16`, `α=32`, `dropout=0.05`; `q/k/v/o/gate/up/down_proj` × 28 layers) | 18,464,768 |
+| Data | same as Stage-1: train 161,653 recs / 29,151 imgs; held-out test 591 imgs / 3,271 recs |
+| Epochs / steps | 1 epoch, 2,526 update steps |
+| Effective batch | 64 (per-device 4 × grad-accum 16) |
+| LR / schedule | 2e-4, cosine, 3% warmup (75 steps) |
+| Max length | 512 (+256 image tokens) |
+| Precision | bf16 (autocast) + gradient checkpointing |
+| Hardware | 1× RTX 6000 Ada (48 GB), ~15 samples/s (~3 h) |
+| Loss | began ~1.47 (= the Stage-1 warm-start, since LoRA initializes as a no-op); final value in `checkpoint-2526/meta.json` |
+
 ### Train
 
 Reuse the **same** `train.json` / `images/` from the Stage-1 build (caption + QA, with the held-out
@@ -357,7 +400,7 @@ restores both the connector and the LoRA adapter automatically:
 ```bash
 python inference.py \
   --config configs/finetune_astrollava_stage2.yaml \
-  --checkpoint checkpoints/astrollava-stage2/checkpoint-XXXX \
+  --checkpoint checkpoints/astrollava-stage2/checkpoint-2526 \
   --image your_astro_image.jpg \
   --prompt "What type of object is this and what is notable about it?" \
   --temperature 0
@@ -365,7 +408,7 @@ python inference.py \
 # Held-out comparison vs Stage-1 on the SAME unseen images:
 python scripts/batch_inference.py \
   --config configs/finetune_astrollava_stage2.yaml \
-  --checkpoint checkpoints/astrollava-stage2/checkpoint-XXXX \
+  --checkpoint checkpoints/astrollava-stage2/checkpoint-2526 \
   --image-dir datasets/astrollava_llava/images \
   --records-json datasets/astrollava_llava/test.json \
   --num-samples 0 --temperature 0 --output predictions_test_stage2.jsonl

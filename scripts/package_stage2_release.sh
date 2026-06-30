@@ -2,14 +2,14 @@
 # Package the AstroLLaVA Stage-2 release bundle.
 # Run from the repo root after training + held-out inference. Produces:
 #   astrollava-stage2.zip
-# Contents: checkpoint-2525/ (connector.safetensors + lora/), predictions_test_stage2.jsonl,
+# Contents: checkpoint-2526/ (connector.safetensors + lora/), predictions_test_stage2.jsonl,
 #           finetune_astrollava_stage2.yaml, test.json, REPRODUCE.md
 set -euo pipefail
 
 command -v zip >/dev/null || { echo "zip not found -> apt-get update && apt-get install -y zip"; exit 1; }
 
 ROOT=$(pwd)
-STEP=2525
+STEP=2526
 CKPT_DIR="checkpoints/astrollava-stage2"
 CKPT="$CKPT_DIR/checkpoint-$STEP"
 CONFIG="configs/finetune_astrollava_stage2.yaml"
@@ -58,7 +58,7 @@ python scripts/build_astrollava_trainset.py \\
 
 ## Train
 python train.py --config configs/finetune_astrollava_stage2.yaml
-# effective batch 64 (per-device 4 x grad-accum 16), 1 epoch, 2525 steps, gradient checkpointing
+# effective batch 64 (per-device 4 x grad-accum 16), 1 epoch, 2526 steps, gradient checkpointing
 
 ## Held-out evaluation (produces this zip's predictions)
 python scripts/batch_inference.py \\
