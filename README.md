@@ -424,9 +424,40 @@ python scripts/batch_inference.py \
   --num-samples 0 --temperature 0 --output predictions_test_stage2.jsonl
 ```
 
-Diff `predictions_test_stage2.jsonl` against the published Stage-1 `predictions_test_ep3.jsonl`: the
-Stage-2 hypothesis is fewer hallucinated specifics on the QA prompts, since the LLM (not just the
-connector) now learns from the images.
+The released caption prediction files were also scored offline with `scripts/score_predictions.py`.
+This is a **caption-only** evaluation over the bundled prediction JSONL files, not a fresh generation
+run and not yet the full caption + QA benchmark. Each file contains 591 rows; 586 rows were scored
+and 5 were skipped in every run, so the comparison is like-for-like.
+
+| Model | scored / rows | ROUGE-L up | Token-F1 up | Exact match up | Specificity halluc. down | Unsupported specifics / record down | Records with predicted specifics down | SBERT cosine up | NLI consistency up | Contradiction rate down |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Stage-1 epoch 1 | 586 / 591 | 0.1487 | 0.2055 | 0.0000 | 0.6741 | 1.2816 | 449 | 0.5501 | -0.1292 | 0.6980 |
+| Stage-1 epoch 2 | 586 / 591 | 0.1586 | 0.2144 | 0.0000 | 0.6655 | 1.2509 | 447 | 0.5733 | -0.1566 | 0.7287 |
+| Stage-1 epoch 3 | 586 / 591 | 0.1612 | 0.2230 | 0.0000 | 0.6263 | 1.1536 | 439 | 0.5822 | -0.1376 | 0.7184 |
+| Stage-2 | 586 / 591 | 0.1719 | 0.2292 | 0.0051 | 0.5785 | 0.9795 | 404 | 0.5912 | -0.1630 | 0.6928 |
+
+Against the final Stage-1 checkpoint (`checkpoint-3789`), Stage-2 improves most caption metrics:
+
+| Metric | Stage-1 epoch 3 | Stage-2 | Change |
+|---|---:|---:|---:|
+| ROUGE-L | 0.1612 | 0.1719 | +0.0107 |
+| Token-F1 | 0.2230 | 0.2292 | +0.0062 |
+| Exact match | 0.0000 | 0.0051 | +0.0051 |
+| Specificity hallucination | 0.6263 | 0.5785 | -0.0478 |
+| Unsupported specifics / record | 1.1536 | 0.9795 | -0.1741 |
+| Records with predicted specifics | 439 | 404 | -35 |
+| SBERT cosine | 0.5822 | 0.5912 | +0.0090 |
+| NLI consistency | -0.1376 | -0.1630 | -0.0254 |
+| Contradiction rate | 0.7184 | 0.6928 | -0.0256 |
+
+The strongest gain is on the project-specific hallucination measures: specificity hallucination
+drops from 0.6263 to 0.5785, and unsupported specifics per caption drop from 1.1536 to 0.9795.
+Contradiction rate also improves, though NLI consistency becomes slightly worse; the NLI model is
+`microsoft/deberta-large-mnli`, a general-domain judge, so read it as an imperfect relative signal.
+SBERT uses `sentence-transformers/all-mpnet-base-v2`.
+
+The result is directionally good but not solved: Stage-2 is the strongest model in this caption-only
+evaluation, yet 57.85% of scored captions still contain at least one unsupported specific detail.
 
 ## Medical RAG Layer (Retrieval-Augmented Grounding)
 
