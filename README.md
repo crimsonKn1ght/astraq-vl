@@ -282,6 +282,27 @@ python scripts/batch_inference.py \
 caption; the resulting `predictions_test_ep{1,2,3}.jsonl` ship in the bundles. Generation runs under
 bf16 autocast to match training.
 
+**Caption-only quantitative evaluation.** The released held-out caption prediction files were scored
+offline with `scripts/score_predictions.py`; this uses the bundled predictions and references, not
+new generation. Each epoch file contains 591 rows; 586 rows were scored and 5 rows were skipped in
+each run, so the epoch comparison is like-for-like.
+
+| Stage-1 checkpoint | scored / rows | ROUGE-L up | Token-F1 up | Exact match up | Specificity halluc. down | Unsupported specifics / record down | Records with predicted specifics down | SBERT cosine up | NLI consistency up | Contradiction rate down |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| epoch 1 (`checkpoint-1300`) | 586 / 591 | 0.1487 | 0.2055 | 0.0000 | 0.6741 | 1.2816 | 449 | 0.5501 | -0.1292 | 0.6980 |
+| epoch 2 (`checkpoint-2500`) | 586 / 591 | 0.1586 | 0.2144 | 0.0000 | 0.6655 | 1.2509 | 447 | 0.5733 | -0.1566 | 0.7287 |
+| epoch 3 (`checkpoint-3789`) | 586 / 591 | 0.1612 | 0.2230 | 0.0000 | 0.6263 | 1.1536 | 439 | 0.5822 | -0.1376 | 0.7184 |
+
+From epoch 1 to epoch 3, lexical overlap and semantic similarity improve, while
+specificity-hallucination drops from 0.6741 to 0.6263 and unsupported specifics per caption drop
+from 1.2816 to 1.1536. NLI remains mixed and negative across epochs; treat it as a relative
+general-domain signal, not an astronomy-specific factuality judge.
+
+Metric setup: SBERT uses `sentence-transformers/all-mpnet-base-v2`; NLI uses
+`microsoft/deberta-large-mnli`. The specificity-hallucination probe flags unsupported
+astronomy-specific details such as catalog IDs, distances, years, and instrument names that appear in
+the prediction but not in the reference.
+
 **Initial observations (spot check on held-out samples).** Comparing the same unseen images across
 epochs showed a clear, monotonic improvement **epoch 1 → 2 → 3**:
 
@@ -301,7 +322,8 @@ out, that gain is genuine generalization, not memorization: the extra epochs pai
 morphology) but still **hallucinates fine specifics** — catalog numbers, instruments, dates,
 distances — filled from the frozen LLM's prior. More Stage-1 epochs do not remove this; a **Stage-2**
 fine-tune (unfreezing the LLM, e.g. LoRA, on the QA pairs) is the next step. Note this is a
-qualitative spot check on a few held-out samples, not a full quantitative benchmark.
+caption-only benchmark over released predictions; it does not yet cover the full caption + QA test
+set.
 
 ### Reproduction
 
