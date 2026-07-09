@@ -12,8 +12,8 @@ This implementation bridges a frozen CLIP vision encoder (`openai/clip-vit-large
 - **Proven approach**: Follows LLaVA Stage 1 alignment, a well-validated recipe
 
 > AstraQ-VL checkpoints trained with this codebase on astronomy image–text data are released on the Hub:
-> **AstraQ-VL Stage 1** (connector) at [`grKnight/astrollava-stage1`](https://huggingface.co/grKnight/astrollava-stage1)
-> and **AstraQ-VL Stage 2** (connector + LoRA) at [`grKnight/astrollava-stage2`](https://huggingface.co/grKnight/astrollava-stage2).
+> **AstraQ-VL Stage 1** (connector) at [`grKnight/astraq-vl-stage1`](https://huggingface.co/grKnight/astraq-vl-stage1)
+> and **AstraQ-VL Stage 2** (connector + LoRA) at [`grKnight/astraq-vl-stage2`](https://huggingface.co/grKnight/astraq-vl-stage2).
 > See [Trained Model: AstraQ-VL Stage-1](#trained-model-astraq-vl-stage-1-astronomy) and
 > [Stage 2: Visual Instruction Tuning (LoRA)](#astraq-vl-stage-2-visual-instruction-tuning-lora) for dataset,
 > training, testing, and download details.
@@ -191,7 +191,7 @@ The `<image>` token in the prompt is automatically replaced with visual embeddin
 
 The AstraQ-VL Stage-1 connector trained with this codebase is released on the Hugging Face Hub:
 
-**https://huggingface.co/grKnight/astrollava-stage1**
+**https://huggingface.co/grKnight/astraq-vl-stage1**
 
 It was trained for **3 full epochs** on real astronomy image–text data, with a **disjoint held-out
 test split** carved out before training so the connector can be evaluated on images it never saw.
@@ -200,9 +200,9 @@ predictions, the training config, the `test.json` split, and a `REPRODUCE.md`:
 
 | Bundle | Checkpoint | |
 |--------|-----------|--|
-| [`astrollava-stage1-ep3.zip`](https://huggingface.co/grKnight/astrollava-stage1/blob/main/astrollava-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
-| [`astrollava-stage1-ep2.zip`](https://huggingface.co/grKnight/astrollava-stage1/blob/main/astrollava-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
-| [`astrollava-stage1-ep1.zip`](https://huggingface.co/grKnight/astrollava-stage1/blob/main/astrollava-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
+| [`astraq-vl-stage1-ep3.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
+| [`astraq-vl-stage1-ep2.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
+| [`astraq-vl-stage1-ep1.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
 
 Each checkpoint is the connector only (`connector.safetensors`, ~16 MB) plus optimizer state. It
 is **not** a standalone `transformers` model — it requires this repository's code and the two base
@@ -240,7 +240,7 @@ python scripts/build_astrollava_trainset.py \
 
 ### Training
 
-Config: `configs/pretrain_astrollava.yaml`; run `python train.py --config configs/pretrain_astrollava.yaml`.
+Config: `configs/pretrain_astraq_vl.yaml`; run `python train.py --config configs/pretrain_astraq_vl.yaml`.
 
 | Setting | Value |
 |---------|-------|
@@ -265,8 +265,8 @@ Each epoch checkpoint was scored on the **591 unseen test images** with a single
 
 ```bash
 python scripts/batch_inference.py \
-  --config configs/pretrain_astrollava.yaml \
-  --checkpoint checkpoints/astrollava-stage1/checkpoint-3789 \
+  --config configs/pretrain_astraq_vl.yaml \
+  --checkpoint checkpoints/astraq-vl-stage1/checkpoint-3789 \
   --image-dir datasets/astrollava_llava/images \
   --records-json datasets/astrollava_llava/test.json \
   --num-samples 0 --temperature 0 --output predictions_test_ep3.jsonl
@@ -326,10 +326,10 @@ pip install peft
 
 The AstraQ-VL Stage-2 model trained with this codebase is published on the Hugging Face Hub:
 
-**https://huggingface.co/grKnight/astrollava-stage2**
+**https://huggingface.co/grKnight/astraq-vl-stage2**
 
 A single bundle
-[`astrollava-stage2.zip`](https://huggingface.co/grKnight/astrollava-stage2/blob/main/astrollava-stage2.zip)
+[`astraq-vl-stage2.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/astraq-vl-stage2.zip)
 holds the final checkpoint (`checkpoint-2526`: `connector.safetensors` **+** `lora/adapter_model.safetensors`
 & `adapter_config.json`), the **held-out** predictions (`predictions_test_stage2.jsonl`), the training
 config, the `test.json` split, and a `REPRODUCE.md`. Like Stage-1 it is **not** a standalone
@@ -337,12 +337,12 @@ config, the `test.json` split, and a `REPRODUCE.md`. Like Stage-1 it is **not** 
 
 ```bash
 # download + unzip
-hf download grKnight/astrollava-stage2 astrollava-stage2.zip --local-dir .
-unzip astrollava-stage2.zip -d ckpt2
+hf download grKnight/astraq-vl-stage2 astraq-vl-stage2.zip --local-dir .
+unzip astraq-vl-stage2.zip -d ckpt2
 
 # answer a question about an image (CLIP + Qwen auto-download; peft loads the LoRA adapter)
 python inference.py \
-  --config ckpt2/finetune_astrollava_stage2.yaml \
+  --config ckpt2/finetune_astraq_vl_stage2.yaml \
   --checkpoint ckpt2/checkpoint-2526 \
   --image your_astro_image.jpg \
   --prompt "What type of object is this and what is notable about it?" \
@@ -375,11 +375,11 @@ flattening by the end of the single epoch.*
 
 Reuse the **same** `train.json` / `images/` from the Stage-1 build (caption + QA, with the held-out
 `test.json`). Point `stage1_checkpoint` at a trained Stage-1 connector (your own
-`checkpoints/astrollava-stage1/checkpoint-3789`, or the released `grKnight/astrollava-stage1`
+`checkpoints/astraq-vl-stage1/checkpoint-3789`, or the released `grKnight/astraq-vl-stage1`
 bundle), then:
 
 ```bash
-python train.py --config configs/finetune_astrollava_stage2.yaml
+python train.py --config configs/finetune_astraq_vl_stage2.yaml
 ```
 
 | Setting | Value | Rationale |
@@ -409,8 +409,8 @@ restores both the connector and the LoRA adapter automatically:
 
 ```bash
 python inference.py \
-  --config configs/finetune_astrollava_stage2.yaml \
-  --checkpoint checkpoints/astrollava-stage2/checkpoint-2526 \
+  --config configs/finetune_astraq_vl_stage2.yaml \
+  --checkpoint checkpoints/astraq-vl-stage2/checkpoint-2526 \
   --image your_astro_image.jpg \
   --prompt "What type of object is this and what is notable about it?" \
   --temperature 0

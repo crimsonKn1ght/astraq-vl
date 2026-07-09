@@ -21,10 +21,10 @@ Push-Location $RepoRoot
 
 try {
     if (-not $Stage1Zip) {
-        $Stage1Zip = Join-Path $FullHeldoutRoot "astrollava-stage1-full-heldout-eval-v1.zip"
+        $Stage1Zip = Join-Path $FullHeldoutRoot "astraq-vl-stage1-full-heldout-eval-v1.zip"
     }
     if (-not $Stage2Zip) {
-        $Stage2Zip = Join-Path $FullHeldoutRoot "astrollava-stage2-full-heldout-eval-v1.zip"
+        $Stage2Zip = Join-Path $FullHeldoutRoot "astraq-vl-stage2-full-heldout-eval-v1.zip"
     }
     if (-not $QwenZip) {
         $QwenZip = Join-Path $FullHeldoutRoot "qwen2_5-vl-7b-full-heldout-eval-v1.zip"

@@ -20,20 +20,20 @@ class EvalTarget:
 
 SUITES = {
     "stage1": {
-        "config": "configs/pretrain_astrollava.yaml",
-        "checkpoint_root": "checkpoints/astrollava-stage1",
+        "config": "configs/pretrain_astraq_vl.yaml",
+        "checkpoint_root": "checkpoints/astraq-vl-stage1",
         "checkpoints": [
             ("stage1_ep1", "checkpoint-1300"),
             ("stage1_ep2", "checkpoint-2500"),
             ("stage1_ep3", "checkpoint-3789"),
         ],
-        "package": "astrollava-stage1-full-heldout-eval-v1.zip",
+        "package": "astraq-vl-stage1-full-heldout-eval-v1.zip",
     },
     "stage2": {
-        "config": "configs/finetune_astrollava_stage2.yaml",
-        "checkpoint_root": "checkpoints/astrollava-stage2",
+        "config": "configs/finetune_astraq_vl_stage2.yaml",
+        "checkpoint_root": "checkpoints/astraq-vl-stage2",
         "checkpoints": [("stage2", "checkpoint-2526")],
-        "package": "astrollava-stage2-full-heldout-eval-v1.zip",
+        "package": "astraq-vl-stage2-full-heldout-eval-v1.zip",
     },
 }
 
@@ -219,7 +219,7 @@ def compare_metrics(metric_paths: Iterable[Path], labels: Iterable[str], args: a
 
 def reproduce_note(stage: str, config: str, targets: List[EvalTarget], args: argparse.Namespace) -> str:
     target_lines = "\n".join(f"- {t.label}: {t.checkpoint}" for t in targets)
-    return f"""# AstroLLaVA full held-out evaluation
+    return f"""# AstraQ-VL full held-out evaluation
 
 Stage: {stage}
 Config: {config}

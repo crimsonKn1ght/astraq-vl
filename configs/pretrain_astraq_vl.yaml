@@ -1,8 +1,8 @@
-# Stage-1 connector alignment on AstroLLaVA_convos (real astronomy image -> text).
+# AstraQ-VL Stage-1 connector alignment on AstroLLaVA_convos (real astronomy image -> text).
 # Build the data first:
 #   python scripts/build_astrollava_trainset.py --output-dir datasets/astrollava_llava
 # Then train:
-#   python train.py --config configs/pretrain_astrollava.yaml
+#   python train.py --config configs/pretrain_astraq_vl.yaml
 vision_encoder:
   model_name: openai/clip-vit-large-patch14
   select_layer: -2
@@ -18,7 +18,7 @@ data:
   image_dir: datasets/astrollava_llava/images
   max_length: 512          # +256 image tokens -> ~768 effective seq. 768 here OOMs the fp32 loss
 training:
-  output_dir: ./checkpoints/astrollava-stage1
+  output_dir: ./checkpoints/astraq-vl-stage1
   num_epochs: 3            # ~30k pairs, connector-only
   per_device_batch_size: 8     # full-length captions + 152k-vocab fp32 loss OOM at 16; 8 is safe (~27 GB)
   gradient_accumulation_steps: 16  # effective batch = 128 (unchanged)

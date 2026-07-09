@@ -3,7 +3,7 @@
 # Clone this repo into /workspace (a network volume) so downloads + checkpoints persist,
 # then run from the repo root:
 #
-#     bash scripts/runpod_setup.sh            # full AstroLLaVA build (train + 2% held-out test)
+#     bash scripts/runpod_setup.sh            # full AstraQ-VL build from AstroLLaVA_convos (train + 2% held-out test)
 #     bash scripts/runpod_setup.sh 50         # smoke test with 50 samples first
 #
 set -euo pipefail
@@ -25,7 +25,7 @@ pip install --no-cache-dir -r requirements.txt
 echo "==> nvidia-smi"
 nvidia-smi || echo "WARNING: no GPU visible — pick a GPU pod."
 
-echo "==> Building the AstroLLaVA training set (real astronomy image-text)"
+echo "==> Building the AstraQ-VL training set from AstroLLaVA_convos (real astronomy image-text)"
 python scripts/build_astrollava_trainset.py "${BUILD_ARGS[@]}"
 
 echo

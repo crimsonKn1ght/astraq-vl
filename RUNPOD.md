@@ -54,7 +54,7 @@ bash scripts/runpod_train.sh
 `runpod_setup.sh` installs `requirements.txt`, points `HF_HOME` at `/workspace/hf_cache`,
 and builds `datasets/astrollava_llava/{train.json,images/}` (caption pairs **and** the
 GPT-4 Q&A turns, via `--include-qa`). `runpod_train.sh` runs
-`train.py --config configs/pretrain_astrollava.yaml`.
+`train.py --config configs/pretrain_astraq_vl.yaml`.
 
 CLIP and Qwen are public weights — no Hugging Face token needed. (Only set
 `huggingface-cli login` if you later switch to a gated dataset.)
@@ -62,12 +62,12 @@ CLIP and Qwen are public weights — no Hugging Face token needed. (Only set
 ## 3. Watch it train
 
 Loss and learning rate print every 10 steps; checkpoints save every 100 steps to
-`checkpoints/astrollava-stage1/`. Each checkpoint is just the connector (~16 MB:
+`checkpoints/astraq-vl-stage1/`. Each checkpoint is just the connector (~16 MB:
 `connector.safetensors` + optimizer state + `meta.json`). With the default config
 (3 epochs, effective batch 128) the full run is short — roughly an hour on a 4090.
 
 If you hit out-of-memory, lower `per_device_batch_size` to 4 in
-`configs/pretrain_astrollava.yaml` and raise `gradient_accumulation_steps` to keep the
+`configs/pretrain_astraq_vl.yaml` and raise `gradient_accumulation_steps` to keep the
 effective batch at 128. (On a 24 GB card you can instead raise it to 16.)
 
 ## 4. Get the checkpoint off the pod
@@ -94,8 +94,8 @@ network volume. Don't terminate before step 4 if you didn't use a volume.
 Point inference at the checkpoint dir:
 
 ```bash
-python inference.py --config configs/pretrain_astrollava.yaml \
-  --checkpoint checkpoints/astrollava-stage1/checkpoint-<step> \
+python inference.py --config configs/pretrain_astraq_vl.yaml \
+  --checkpoint checkpoints/astraq-vl-stage1/checkpoint-<step> \
   --image datasets/astrollava_llava/images/astrollava_train_0.png \
   --prompt "Describe this astronomical image."
 ```

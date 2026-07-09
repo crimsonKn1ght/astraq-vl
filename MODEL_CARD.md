@@ -38,9 +38,9 @@ the training config, the `test.json` split, and a `REPRODUCE.md`:
 
 | Bundle | Checkpoint | |
 |--------|-----------|--|
-| [`astrollava-stage1-ep3.zip`](https://huggingface.co/grKnight/astrollava-stage1/blob/main/astrollava-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
-| [`astrollava-stage1-ep2.zip`](https://huggingface.co/grKnight/astrollava-stage1/blob/main/astrollava-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
-| [`astrollava-stage1-ep1.zip`](https://huggingface.co/grKnight/astrollava-stage1/blob/main/astrollava-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
+| [`astraq-vl-stage1-ep3.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
+| [`astraq-vl-stage1-ep2.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
+| [`astraq-vl-stage1-ep1.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
 
 > **Superseded files.** An earlier release (`*-legacy-1epoch-no-heldout-*`) was trained to ~1 epoch
 > only and evaluated on training images (no held-out split, so possible leakage). Kept for record;
@@ -84,12 +84,12 @@ git clone https://github.com/crimsonKn1ght/astraq-vl && cd astraq-vl
 pip install -r requirements.txt
 
 # 2. download + unzip the recommended bundle
-hf download grKnight/astrollava-stage1 astrollava-stage1-ep3.zip --local-dir .
-unzip astrollava-stage1-ep3.zip -d ckpt
+hf download grKnight/astraq-vl-stage1 astraq-vl-stage1-ep3.zip --local-dir .
+unzip astraq-vl-stage1-ep3.zip -d ckpt
 
 # 3. caption an image (CLIP + Qwen auto-download on first run)
 python inference.py \
-  --config ckpt/pretrain_astrollava.yaml \
+  --config ckpt/pretrain_astraq_vl.yaml \
   --checkpoint ckpt/checkpoint-3789 \
   --image your_astro_image.jpg \
   --prompt "Describe this astronomical image." \
@@ -112,7 +112,7 @@ distances), filling specifics from the frozen LLM's prior rather than the pixels
 expected Stage-1 ceiling: the connector supplies a coarse visual category and the frozen LLM
 improvises the rest. For factual specificity, a **Stage-2 fine-tune** (unfreezing the LLM via LoRA
 on the QA pairs) is the fix — more Stage-1 epochs do not help. That model is now released at
-[`grKnight/astrollava-stage2`](https://huggingface.co/grKnight/astrollava-stage2).
+[`grKnight/astraq-vl-stage2`](https://huggingface.co/grKnight/astraq-vl-stage2).
 
 The held-out comparison above is a **qualitative spot check** on a few samples, not a full
 quantitative benchmark.
@@ -125,7 +125,7 @@ the exact train/test partition.
 
 ```
 build:  python scripts/build_astrollava_trainset.py --include-qa --max-image-size 384 --test-fraction 0.02 --seed 42
-train:  python train.py --config configs/pretrain_astrollava.yaml
+train:  python train.py --config configs/pretrain_astraq_vl.yaml
 eval:   python scripts/batch_inference.py --records-json datasets/astrollava_llava/test.json --num-samples 0 ...
 ```
 

@@ -73,8 +73,8 @@ After Stage-1, Stage-2, Qwen2.5-VL, and AstroLLaVA reference zips are available:
 
 ```bash
 python scripts/compare_full_heldout_artifacts.py \
-  --stage1-zip astrollava-stage1-full-heldout-eval-v1.zip \
-  --stage2-zip astrollava-stage2-full-heldout-eval-v1.zip \
+  --stage1-zip astraq-vl-stage1-full-heldout-eval-v1.zip \
+  --stage2-zip astraq-vl-stage2-full-heldout-eval-v1.zip \
   --qwen-zip qwen2_5-vl-7b-full-heldout-eval-v1.zip \
   --astrollava-zip astrollava-reference-full-heldout-eval-v1.zip \
   --out eval_runs/full_heldout/comparison/all_models_full_heldout_comparison

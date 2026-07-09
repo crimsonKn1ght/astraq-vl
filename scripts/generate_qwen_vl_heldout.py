@@ -1,7 +1,7 @@
 """Generate full held-out predictions with Qwen2.5-VL.
 
 This is an external-baseline generator. It reads the same LLaVA-format
-``test.json`` used by the AstroLLaVA checkpoints and writes JSONL rows compatible
+``test.json`` used by the AstraQ-VL checkpoints and writes JSONL rows compatible
 with ``scripts/score_predictions.py``.
 """
 

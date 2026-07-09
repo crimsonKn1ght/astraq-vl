@@ -16,7 +16,7 @@ Usage (from repo root):
     python scripts/plot_training_curve.py - < train_stage2.log
 
     # sparse fallback: read {step,loss} from checkpoint meta.json files (no log needed)
-    python scripts/plot_training_curve.py --meta-dir checkpoints/astrollava-stage2 --out curve_from_meta
+    python scripts/plot_training_curve.py --meta-dir checkpoints/astraq-vl-stage2 --out curve_from_meta
 """
 
 import argparse

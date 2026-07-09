@@ -11,8 +11,8 @@ is fast (a forward pass over N samples per checkpoint, no backward).
 
 Usage (from repo root, on a GPU):
     python scripts/eval_loss_curve.py \
-        --config configs/finetune_astrollava_stage2.yaml \
-        --checkpoint-dir checkpoints/astrollava-stage2 \
+        --config configs/finetune_astraq_vl_stage2.yaml \
+        --checkpoint-dir checkpoints/astraq-vl-stage2 \
         --records-json datasets/astrollava_llava/test.json \
         --image-dir datasets/astrollava_llava/images \
         --num-samples 512 --out eval_loss_curve --plot

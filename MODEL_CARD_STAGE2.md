@@ -24,7 +24,7 @@ tags:
 
 A LLaVA-style vision–language model that lets **Qwen2.5-1.5B-Instruct** answer questions about
 astronomy images encoded by **CLIP ViT-L/14**. This is the **AstraQ-VL Stage-2** model: it warm-starts the
-[AstraQ-VL Stage-1 connector](https://huggingface.co/grKnight/astrollava-stage1) and **continues training it
+[AstraQ-VL Stage-1 connector](https://huggingface.co/grKnight/astraq-vl-stage1) and **continues training it
 jointly with LoRA adapters on the Qwen LLM**, on the caption + GPT-4 QA records of
 [`UniverseTBD/AstroLLaVA_convos`](https://huggingface.co/datasets/UniverseTBD/AstroLLaVA_convos).
 The CLIP vision tower stays frozen. Trained on a **disjoint held-out test split** so it can be
@@ -45,7 +45,7 @@ A single bundle holds the final checkpoint and everything needed to run / reprod
 
 | Bundle | Contents |
 |--------|----------|
-| [`astrollava-stage2.zip`](https://huggingface.co/grKnight/astrollava-stage2/blob/main/astrollava-stage2.zip) | `checkpoint-2526/` (`connector.safetensors` + `lora/`), `predictions_test_stage2.jsonl`, `finetune_astrollava_stage2.yaml`, `test.json`, `REPRODUCE.md` |
+| [`astraq-vl-stage2.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/astraq-vl-stage2.zip) | `checkpoint-2526/` (`connector.safetensors` + `lora/`), `predictions_test_stage2.jsonl`, `finetune_astraq_vl_stage2.yaml`, `test.json`, `REPRODUCE.md` |
 
 `checkpoint-2526/` contains the continued-trained connector (`connector.safetensors`), the trained
 LoRA adapter (`lora/adapter_model.safetensors` + `adapter_config.json`), optimizer/scheduler state
@@ -98,8 +98,8 @@ end of the single epoch, consistent with the 1-epoch choice:
 
 ![AstraQ-VL Stage-2 held-out loss curve](eval_loss_curve.png)
 
-Regenerate with `python scripts/eval_loss_curve.py --config configs/finetune_astrollava_stage2.yaml
---checkpoint-dir checkpoints/astrollava-stage2 --records-json datasets/astrollava_llava/test.json
+Regenerate with `python scripts/eval_loss_curve.py --config configs/finetune_astraq_vl_stage2.yaml
+--checkpoint-dir checkpoints/astraq-vl-stage2 --records-json datasets/astrollava_llava/test.json
 --image-dir datasets/astrollava_llava/images --num-samples 512 --plot` (full series in
 `eval_loss_curve.csv`).
 
@@ -111,12 +111,12 @@ git clone https://github.com/crimsonKn1ght/astraq-vl && cd astraq-vl
 pip install -r requirements.txt        # includes peft
 
 # 2. download + unzip the bundle
-hf download grKnight/astrollava-stage2 astrollava-stage2.zip --local-dir .
-unzip astrollava-stage2.zip -d ckpt2
+hf download grKnight/astraq-vl-stage2 astraq-vl-stage2.zip --local-dir .
+unzip astraq-vl-stage2.zip -d ckpt2
 
 # 3. answer a question about an image (CLIP + Qwen auto-download; peft loads the LoRA)
 python inference.py \
-  --config ckpt2/finetune_astrollava_stage2.yaml \
+  --config ckpt2/finetune_astraq_vl_stage2.yaml \
   --checkpoint ckpt2/checkpoint-2526 \
   --image your_astro_image.jpg \
   --prompt "What type of object is this and what is notable about it?" \
@@ -147,10 +147,10 @@ command, the training command, and package versions (`torch`, `transformers`, `p
 seeded, so the build reproduces the exact train/test partition.
 
 ```
-prereq: Stage-1 connector checkpoint-3789 (grKnight/astrollava-stage1 ep3 bundle)
+prereq: Stage-1 connector checkpoint-3789 (grKnight/astraq-vl-stage1 ep3 bundle)
 build:  python scripts/build_astrollava_trainset.py --include-qa --max-image-size 384 --test-fraction 0.02 --seed 42
-train:  python train.py --config configs/finetune_astrollava_stage2.yaml
-eval:   python scripts/batch_inference.py --config configs/finetune_astrollava_stage2.yaml --records-json datasets/astrollava_llava/test.json --num-samples 0 ...
+train:  python train.py --config configs/finetune_astraq_vl_stage2.yaml
+eval:   python scripts/batch_inference.py --config configs/finetune_astraq_vl_stage2.yaml --records-json datasets/astrollava_llava/test.json --num-samples 0 ...
 ```
 
 ## License & attribution
@@ -159,6 +159,6 @@ eval:   python scripts/batch_inference.py --config configs/finetune_astrollava_s
 - **Training data:** [`UniverseTBD/AstroLLaVA_convos`](https://huggingface.co/datasets/UniverseTBD/AstroLLaVA_convos)
   (CC-BY-SA-4.0); imagery from NASA APOD, ESO, and NASA/ESA Hubble.
 - **Base models:** Qwen2.5-1.5B-Instruct (Apache-2.0), CLIP ViT-L/14 (OpenAI, MIT).
-- **Builds on:** [AstraQ-VL Stage-1](https://huggingface.co/grKnight/astrollava-stage1) and the
+- **Builds on:** [AstraQ-VL Stage-1](https://huggingface.co/grKnight/astraq-vl-stage1) and the
   AstroLLaVA work ([arXiv:2504.08583](https://arxiv.org/abs/2504.08583)).
 ```

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Package the AstraQ-VL Stage-2 release bundle.
 # Run from the repo root after training + held-out inference. Produces:
-#   astrollava-stage2.zip
+#   astraq-vl-stage2.zip
 # Contents: checkpoint-2526/ (connector.safetensors + lora/), predictions_test_stage2.jsonl,
-#           finetune_astrollava_stage2.yaml, test.json, REPRODUCE.md
+#           finetune_astraq_vl_stage2.yaml, test.json, REPRODUCE.md
 set -euo pipefail
 
 command -v zip >/dev/null || { echo "zip not found -> apt-get update && apt-get install -y zip"; exit 1; }
 
 ROOT=$(pwd)
 STEP=2526
-CKPT_DIR="checkpoints/astrollava-stage2"
+CKPT_DIR="checkpoints/astraq-vl-stage2"
 CKPT="$CKPT_DIR/checkpoint-$STEP"
-CONFIG="configs/finetune_astrollava_stage2.yaml"
+CONFIG="configs/finetune_astraq_vl_stage2.yaml"
 TEST_JSON="datasets/astrollava_llava/test.json"
 PREDS="predictions_test_stage2.jsonl"
 STAGE="release/stage2"
@@ -48,7 +48,7 @@ cat > "$STAGE/REPRODUCE.md" <<EOF
 - Versions: $VERS
 
 ## Prerequisites
-Stage-1 connector checkpoint (checkpoint-3789 from grKnight/astrollava-stage1 ep3 bundle).
+Stage-1 connector checkpoint (checkpoint-3789 from grKnight/astraq-vl-stage1 ep3 bundle).
 
 ## Build data (same split as Stage-1; seeded => deterministic)
 python scripts/build_astrollava_trainset.py \\
@@ -57,13 +57,13 @@ python scripts/build_astrollava_trainset.py \\
 # -> train.json (29,151 imgs / 161,653 recs) + test.json (591 imgs / 3,271 recs), disjoint by image
 
 ## Train
-python train.py --config configs/finetune_astrollava_stage2.yaml
+python train.py --config configs/finetune_astraq_vl_stage2.yaml
 # effective batch 64 (per-device 4 x grad-accum 16), 1 epoch, 2526 steps, gradient checkpointing
 
 ## Held-out evaluation (produces this zip's predictions)
 python scripts/batch_inference.py \\
-  --config configs/finetune_astrollava_stage2.yaml \\
-  --checkpoint checkpoints/astrollava-stage2/checkpoint-$STEP \\
+  --config configs/finetune_astraq_vl_stage2.yaml \\
+  --checkpoint checkpoints/astraq-vl-stage2/checkpoint-$STEP \\
   --image-dir datasets/astrollava_llava/images \\
   --records-json datasets/astrollava_llava/test.json \\
   --num-samples 0 --temperature 0 \\
@@ -71,8 +71,8 @@ python scripts/batch_inference.py \\
 
 ## Inference (single image)
 python inference.py \\
-  --config configs/finetune_astrollava_stage2.yaml \\
-  --checkpoint checkpoints/astrollava-stage2/checkpoint-$STEP \\
+  --config configs/finetune_astraq_vl_stage2.yaml \\
+  --checkpoint checkpoints/astraq-vl-stage2/checkpoint-$STEP \\
   --image your_image.jpg \\
   --prompt "What is this astronomical object and what is notable about it?" \\
   --temperature 0
@@ -85,7 +85,7 @@ python inference.py \\
     training_state.pt               optimizer + scheduler state
     meta.json                       step + final loss
 - $PREDS             captions on the 591 held-out images (response + reference)
-- finetune_astrollava_stage2.yaml   training / inference config
+- finetune_astraq_vl_stage2.yaml   training / inference config
 - test.json          the held-out split (regenerate images via build command above)
 
 Stage-2 improves on Stage-1 by fine-tuning the LLM (LoRA) jointly with the connector on the same
@@ -94,8 +94,8 @@ so the LoRA modules are built, then load this checkpoint; inference.py restores 
 Compare predictions with Stage-1 predictions_test_ep3.jsonl to see the hallucination reduction.
 EOF
 
-( cd "$STAGE" && zip -rq "$ROOT/astrollava-stage2.zip" . )
-echo "==> astrollava-stage2.zip  (checkpoint-$STEP, loss $loss)"
+( cd "$STAGE" && zip -rq "$ROOT/astraq-vl-stage2.zip" . )
+echo "==> astraq-vl-stage2.zip  (checkpoint-$STEP, loss $loss)"
 echo
 rm -rf release
-ls -lh "$ROOT/astrollava-stage2.zip"
+ls -lh "$ROOT/astraq-vl-stage2.zip"

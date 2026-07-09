@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Package per-epoch release artifacts for the AstraQ-VL Stage-1 (held-out) run.
 # Run from the repo root after training + held-out inference. Produces three zips:
-#   astrollava-stage1-ep1.zip / -ep2.zip / -ep3.zip
+#   astraq-vl-stage1-ep1.zip / -ep2.zip / -ep3.zip
 # Each bundles: the epoch's checkpoint, its held-out predictions, the training config,
 # the held-out test split, and a REPRODUCE.md provenance file.
 set -euo pipefail
@@ -9,8 +9,8 @@ set -euo pipefail
 command -v zip >/dev/null || { echo "zip not found -> apt-get update && apt-get install -y zip"; exit 1; }
 
 ROOT=$(pwd)
-CKPT_DIR="checkpoints/astrollava-stage1"
-CONFIG="configs/pretrain_astrollava.yaml"
+CKPT_DIR="checkpoints/astraq-vl-stage1"
+CONFIG="configs/pretrain_astraq_vl.yaml"
 TEST_JSON="datasets/astrollava_llava/test.json"
 
 # epoch -> last saved step for that epoch (edit if your checkpoints differ)
@@ -49,15 +49,15 @@ python scripts/build_astrollava_trainset.py --output-dir datasets/astrollava_lla
 # -> train.json (29,151 imgs / 161,653 recs) + test.json (591 imgs / 3,271 recs), disjoint by image
 
 ## Train
-python train.py --config configs/pretrain_astrollava.yaml   # effective batch 128, 3 epochs
+python train.py --config configs/pretrain_astraq_vl.yaml   # effective batch 128, 3 epochs
 
 ## Held-out evaluation (produces this zip's predictions)
-python scripts/batch_inference.py --config configs/pretrain_astrollava.yaml --checkpoint $ckpt --image-dir datasets/astrollava_llava/images --records-json datasets/astrollava_llava/test.json --num-samples 0 --temperature 0 --output $preds
+python scripts/batch_inference.py --config configs/pretrain_astraq_vl.yaml --checkpoint $ckpt --image-dir datasets/astrollava_llava/images --records-json datasets/astrollava_llava/test.json --num-samples 0 --temperature 0 --output $preds
 
 ## Contents
 - checkpoint-$step/         connector.safetensors + training_state.pt (optimizer) + meta.json
 - $preds                    captions on the 591 held-out images (response + reference)
-- pretrain_astrollava.yaml  training / inference config
+- pretrain_astraq_vl.yaml  training / inference config
 - test.json                 the held-out split (regenerate the images via the build command above)
 
 Epoch checkpoints: ep1 = step ~1300 (~1 epoch), ep2 = step ~2500 (~2 epochs), ep3 = step 3789 (final).
@@ -67,10 +67,10 @@ instruments, dates) may be hallucinated — the Stage-1 ceiling. On held-out ima
 caption quality improved ep1 < ep2 < ep3.
 EOF
 
-  ( cd "$stage" && zip -rq "$ROOT/astrollava-stage1-ep$ep.zip" . )
-  echo "==> astrollava-stage1-ep$ep.zip  (checkpoint-$step, loss $loss, $preds)"
+  ( cd "$stage" && zip -rq "$ROOT/astraq-vl-stage1-ep$ep.zip" . )
+  echo "==> astraq-vl-stage1-ep$ep.zip  (checkpoint-$step, loss $loss, $preds)"
 done
 
 rm -rf release
 echo
-ls -lh "$ROOT"/astrollava-stage1-ep*.zip
+ls -lh "$ROOT"/astraq-vl-stage1-ep*.zip

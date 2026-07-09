@@ -29,7 +29,7 @@ python scripts/generate_heldout_records.py \
 
 ## Full Stage-1 run
 
-Download or place the Stage-1 checkpoints under `checkpoints/astrollava-stage1/`:
+Download or place the Stage-1 checkpoints under `checkpoints/astraq-vl-stage1/`:
 
 - `checkpoint-1300`
 - `checkpoint-2500`
@@ -45,13 +45,13 @@ python scripts/run_full_heldout_eval.py \
   --package
 ```
 
-If a checkpoint is missing, the script trains with `configs/pretrain_astrollava.yaml`
+If a checkpoint is missing, the script trains with `configs/pretrain_astraq_vl.yaml`
 and then re-checks the expected checkpoint names. Use `--no-train-if-missing` for an
 eval-only run that fails fast instead.
 
 ## Full Stage-2 run
 
-Download or place the Stage-2 checkpoint under `checkpoints/astrollava-stage2/checkpoint-2526`.
+Download or place the Stage-2 checkpoint under `checkpoints/astraq-vl-stage2/checkpoint-2526`.
 The checkpoint must include both `connector.safetensors` and `lora/adapter_model.safetensors`.
 
 ```bash
@@ -63,7 +63,7 @@ python scripts/run_full_heldout_eval.py \
 ```
 
 If the Stage-2 checkpoint is missing, the script trains with
-`configs/finetune_astrollava_stage2.yaml` and then re-checks `checkpoint-2526`.
+`configs/finetune_astraq_vl_stage2.yaml` and then re-checks `checkpoint-2526`.
 
 ## Outputs
 
@@ -74,7 +74,7 @@ Outputs are written under `eval_runs/full_heldout/`:
 - `metrics_full_heldout.json`
 - `metrics_full_heldout.per_sample.jsonl`
 - `comparison/full_heldout_comparison.{json,csv,md}`
-- `astrollava-stage1-full-heldout-eval-v1.zip` or `astrollava-stage2-full-heldout-eval-v1.zip`
+- `astraq-vl-stage1-full-heldout-eval-v1.zip` or `astraq-vl-stage2-full-heldout-eval-v1.zip`
 
 The metrics are produced by `scripts/score_predictions.py`: ROUGE-L, token-F1,
 exact match, specificity hallucination, NLI consistency, contradiction rate, and
@@ -86,8 +86,8 @@ The preprint-facing release ZIPs are:
 
 | Artifact | SHA256 |
 | --- | --- |
-| `astrollava-stage1-full-heldout-eval-v1.zip` | `4B2B38C8F40B7345979F7D9E078453CE8FC23FBC87C77BC462CF5F7DD11DEEC1` |
-| `astrollava-stage2-full-heldout-eval-v1.zip` | `9D940A77C4F072A00F925588069C6B1E8670891F5DFA1126489B914FA144CF99` |
+| `astraq-vl-stage1-full-heldout-eval-v1.zip` | `4B2B38C8F40B7345979F7D9E078453CE8FC23FBC87C77BC462CF5F7DD11DEEC1` |
+| `astraq-vl-stage2-full-heldout-eval-v1.zip` | `9D940A77C4F072A00F925588069C6B1E8670891F5DFA1126489B914FA144CF99` |
 | `qwen2_5-vl-7b-full-heldout-eval-v1.zip` | `602B6708D6F31898149942EEF85CEF87E9FE13874511F1E3BCB8E97FA98939C5` |
 | `astrollava-reference-full-heldout-eval-v1.zip` | `F014B70908AA0EDCF27BECDECDF9940EF8F286935114F3F18B5B9B66965C92F5` |
 

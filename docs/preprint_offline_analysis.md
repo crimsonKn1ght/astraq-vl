@@ -7,8 +7,8 @@ steps can run from the packaged artifacts without keeping a GPU pod alive.
 
 Use the ZIPs produced by the full-heldout scripts:
 
-- `astrollava-stage1-full-heldout-eval-v1.zip`
-- `astrollava-stage2-full-heldout-eval-v1.zip`
+- `astraq-vl-stage1-full-heldout-eval-v1.zip`
+- `astraq-vl-stage2-full-heldout-eval-v1.zip`
 - `qwen2_5-vl-7b-full-heldout-eval-v1.zip`
 - `astrollava-reference-full-heldout-eval-v1.zip`
 
@@ -33,8 +33,8 @@ Run paired bootstrap intervals on common held-out records:
 
 ```bash
 python scripts/bootstrap_full_heldout_ci.py \
-  --stage1-zip eval_runs/full_heldout/astrollava-stage1-full-heldout-eval-v1.zip \
-  --stage2-zip eval_runs/full_heldout/astrollava-stage2-full-heldout-eval-v1.zip \
+  --stage1-zip eval_runs/full_heldout/astraq-vl-stage1-full-heldout-eval-v1.zip \
+  --stage2-zip eval_runs/full_heldout/astraq-vl-stage2-full-heldout-eval-v1.zip \
   --qwen-zip eval_runs/full_heldout/qwen2_5-vl-7b-full-heldout-eval-v1.zip \
   --astrollava-zip eval_runs/full_heldout/astrollava-reference-full-heldout-eval-v1.zip \
   --n-bootstrap 10000 \
@@ -74,8 +74,8 @@ Markdown:
 
 ```bash
 python scripts/mine_qualitative_examples.py \
-  --stage2 eval_runs/full_heldout/astrollava-stage2-full-heldout-eval-v1.zip \
-  --stage1 eval_runs/full_heldout/astrollava-stage1-full-heldout-eval-v1.zip \
+  --stage2 eval_runs/full_heldout/astraq-vl-stage2-full-heldout-eval-v1.zip \
+  --stage1 eval_runs/full_heldout/astraq-vl-stage1-full-heldout-eval-v1.zip \
   --qwen eval_runs/full_heldout/qwen2_5-vl-7b-full-heldout-eval-v1.zip \
   --astrollava eval_runs/full_heldout/astrollava-reference-full-heldout-eval-v1.zip \
   --per-category 12 \
@@ -97,7 +97,7 @@ Export a 100-200 record sample for external judgment:
 
 ```bash
 python scripts/sample_judge_set.py \
-  --artifact eval_runs/full_heldout/astrollava-stage2-full-heldout-eval-v1.zip \
+  --artifact eval_runs/full_heldout/astraq-vl-stage2-full-heldout-eval-v1.zip \
   --artifact eval_runs/full_heldout/qwen2_5-vl-7b-full-heldout-eval-v1.zip \
   --artifact eval_runs/full_heldout/astrollava-reference-full-heldout-eval-v1.zip \
   --sample-size 150 \
