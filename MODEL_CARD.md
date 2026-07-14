@@ -20,6 +20,8 @@ tags:
 
 # AstraQ-VL Stage-1 (connector alignment)
 
+AstraQ-VL Stage-1 is the public name for this connector-alignment checkpoint.
+
 A LLaVA-style vision–language connector that lets **Qwen2.5-1.5B-Instruct** describe astronomy
 images encoded by **CLIP ViT-L/14**. Only the connector (~3.9M params) is trained; both backbones
 stay frozen. This is the **Stage-1 feature-alignment** stage, trained for **3 epochs** on
@@ -38,9 +40,23 @@ the training config, the `test.json` split, and a `REPRODUCE.md`:
 
 | Bundle | Checkpoint | |
 |--------|-----------|--|
-| [`astraq-vl-stage1-ep3.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
-| [`astraq-vl-stage1-ep2.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
-| [`astraq-vl-stage1-ep1.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
+| [`astraq-vl-stage1-ep3.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/checkpoints/standard/astraq-vl-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
+| [`astraq-vl-stage1-ep2.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/checkpoints/standard/astraq-vl-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
+| [`astraq-vl-stage1-ep1.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/checkpoints/standard/astraq-vl-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
+
+## Evaluation artifacts
+
+| Artifact | Scope | Contents |
+|----------|-------|----------|
+| [`astraq-vl-stage1-full-heldout-eval-v1.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/evaluations/full-heldout/astraq-vl-stage1-full-heldout-eval-v1.zip) | **Full held-out: captions + QA** | Predictions and aggregate/per-sample metrics for all 3,271 held-out records: 586 caption records and 2,685 QA records, plus comparisons and reproduction notes. |
+| [`phase0_stage1_ep1_results.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/evaluations/phase0-captions-only/phase0_stage1_ep1_results.zip) | **Phase 0 (captions only), epoch 1** | Caption predictions with NLI and SBERT aggregate/per-sample scores. |
+| [`phase0_stage1_ep2_results.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/evaluations/phase0-captions-only/phase0_stage1_ep2_results.zip) | **Phase 0 (captions only), epoch 2** | Caption predictions with NLI and SBERT aggregate/per-sample scores. |
+| [`phase0_stage1_results.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/evaluations/phase0-captions-only/phase0_stage1_results.zip) | **Phase 0 (captions only), epoch 3** | Caption predictions with NLI and SBERT aggregate/per-sample scores. |
+
+The Phase 0 archives are the earlier caption-generation evaluation only; they do **not** include
+the held-out QA records. Each contains predictions for 591 held-out images, of which 586 have
+reference captions used for scoring. Use the full-heldout artifact for the combined caption + QA
+evaluation.
 
 > **Superseded files.** An earlier release (`*-legacy-1epoch-no-heldout-*`) was trained to ~1 epoch
 > only and evaluated on training images (no held-out split, so possible leakage). Kept for record;
@@ -84,12 +100,12 @@ git clone https://github.com/crimsonKn1ght/astraq-vl && cd astraq-vl
 pip install -r requirements.txt
 
 # 2. download + unzip the recommended bundle
-hf download grKnight/astraq-vl-stage1 astraq-vl-stage1-ep3.zip --local-dir .
-unzip astraq-vl-stage1-ep3.zip -d ckpt
+hf download grKnight/astraq-vl-stage1 checkpoints/standard/astraq-vl-stage1-ep3.zip --local-dir .
+unzip checkpoints/standard/astraq-vl-stage1-ep3.zip -d ckpt
 
 # 3. caption an image (CLIP + Qwen auto-download on first run)
 python inference.py \
-  --config ckpt/pretrain_astraq_vl.yaml \
+  --config ckpt/pretrain_astrollava.yaml \
   --checkpoint ckpt/checkpoint-3789 \
   --image your_astro_image.jpg \
   --prompt "Describe this astronomical image." \
@@ -109,7 +125,7 @@ memorization.
 
 **What it doesn't** — it **hallucinates fine details** (exact catalog numbers, telescopes, dates,
 distances), filling specifics from the frozen LLM's prior rather than the pixels. This is the
-expected Stage-1 ceiling: the connector supplies a coarse visual category and the frozen LLM
+expected AstraQ-VL Stage-1 ceiling: the connector supplies a coarse visual category and the frozen LLM
 improvises the rest. For factual specificity, a **Stage-2 fine-tune** (unfreezing the LLM via LoRA
 on the QA pairs) is the fix — more Stage-1 epochs do not help. That model is now released at
 [`grKnight/astraq-vl-stage2`](https://huggingface.co/grKnight/astraq-vl-stage2).

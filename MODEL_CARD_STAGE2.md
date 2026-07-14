@@ -22,6 +22,8 @@ tags:
 
 # AstraQ-VL Stage-2 (connector + LoRA instruction tuning)
 
+AstraQ-VL Stage-2 is the public name for this connector-plus-LoRA checkpoint.
+
 A LLaVA-style vision–language model that lets **Qwen2.5-1.5B-Instruct** answer questions about
 astronomy images encoded by **CLIP ViT-L/14**. This is the **AstraQ-VL Stage-2** model: it warm-starts the
 [AstraQ-VL Stage-1 connector](https://huggingface.co/grKnight/astraq-vl-stage1) and **continues training it
@@ -34,23 +36,36 @@ Stage 1 aligned the connector with the LLM frozen — it grounds *coarse* visual
 hallucinates fine specifics. Stage 2 opens up the LLM (via LoRA) so the model learns to *use* the
 visual evidence when committing to answers — the recipe's instruction-tuning step.
 
-> ⚠️ This bundle ships the **connector + LoRA adapter only** (not full LLM weights). It is **not** a
+> ⚠️ This repository ships the **connector + LoRA adapter only** (not full LLM weights). It is **not** a
 > standalone `transformers` model — it needs the custom VLM code from the
 > [astraq-vl](https://github.com/crimsonKn1ght/astraq-vl) repo, the two base models
 > (auto-downloaded from the Hub), and [`peft`](https://github.com/huggingface/peft) to run.
 
 ## Download
 
-A single bundle holds the final checkpoint and everything needed to run / reproduce it:
+The repository contains checkpoints saved every 200 steps and the final checkpoint at step 2526.
+For inference, download the final checkpoint directory:
 
-| Bundle | Contents |
-|--------|----------|
-| [`astraq-vl-stage2.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/astraq-vl-stage2.zip) | `checkpoint-2526/` (`connector.safetensors` + `lora/`), `predictions_test_stage2.jsonl`, `finetune_astraq_vl_stage2.yaml`, `test.json`, `REPRODUCE.md` |
+| Artifact | Contents |
+|----------|----------|
+| [`checkpoints/checkpoint-2526/`](https://huggingface.co/grKnight/astraq-vl-stage2/tree/main/checkpoints/checkpoint-2526) | Final connector, LoRA adapter, metadata, and training state. |
+| [`astraq-vl-stage2-metrics.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/metrics/astraq-vl-stage2-metrics.zip) | Stage-2 aggregate and per-sample metrics. |
+| [`eval_loss_curve.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/metrics/eval-loss-curve/eval_loss_curve.zip) | Held-out loss curve in CSV, JSON, and PNG formats. |
 
 `checkpoint-2526/` contains the continued-trained connector (`connector.safetensors`), the trained
 LoRA adapter (`lora/adapter_model.safetensors` + `adapter_config.json`), optimizer/scheduler state
 (`training_state.pt`), and `meta.json` (step + final loss). **Both** the connector and the LoRA are
 required at inference.
+
+## Evaluation artifacts
+
+| Artifact | Scope | Contents |
+|----------|-------|----------|
+| [`astraq-vl-stage2-full-heldout-eval-v1.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/evaluations/full-heldout/astraq-vl-stage2-full-heldout-eval-v1.zip) | **Full held-out: captions + QA** | Predictions and aggregate/per-sample metrics for all 3,271 held-out records: 586 caption records and 2,685 QA records, plus comparisons, config, test split, and reproduction notes. |
+| [`phase0_stage2_results.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/evaluations/phase0/phase0_stage2_results.zip) | **Phase 0 (captions only)** | Caption predictions for 591 held-out images, with NLI and SBERT aggregate/per-sample scores; 586 images have reference captions used for scoring. |
+
+The Phase 0 archive does **not** include the held-out QA records. Use the full-heldout artifact for
+the combined caption + QA evaluation.
 
 ## Architecture
 
@@ -96,7 +111,7 @@ end of the single epoch, consistent with the 1-epoch choice:
 |------|----:|----:|----:|----:|-----:|-----:|-----:|-----:|-----:|-----:|-----:|-----:|-----:|
 | held-out loss | 1.605 | 1.571 | 1.548 | 1.526 | 1.508 | 1.494 | 1.479 | 1.471 | 1.462 | 1.456 | 1.454 | 1.452 | **1.452** |
 
-![AstraQ-VL Stage-2 held-out loss curve](eval_loss_curve.png)
+![AstraQ-VL Stage-2 held-out loss curve](metrics/eval-loss-curve/eval_loss_curve.png)
 
 Regenerate with `python scripts/eval_loss_curve.py --config configs/finetune_astraq_vl_stage2.yaml
 --checkpoint-dir checkpoints/astraq-vl-stage2 --records-json datasets/astrollava_llava/test.json
@@ -110,31 +125,30 @@ Regenerate with `python scripts/eval_loss_curve.py --config configs/finetune_ast
 git clone https://github.com/crimsonKn1ght/astraq-vl && cd astraq-vl
 pip install -r requirements.txt        # includes peft
 
-# 2. download + unzip the bundle
-hf download grKnight/astraq-vl-stage2 astraq-vl-stage2.zip --local-dir .
-unzip astraq-vl-stage2.zip -d ckpt2
+# 2. download the final checkpoint directory
+hf download grKnight/astraq-vl-stage2 --include "checkpoints/checkpoint-2526/**" --local-dir astraq-vl-stage2
 
 # 3. answer a question about an image (CLIP + Qwen auto-download; peft loads the LoRA)
 python inference.py \
-  --config ckpt2/finetune_astraq_vl_stage2.yaml \
-  --checkpoint ckpt2/checkpoint-2526 \
+  --config configs/finetune_astraq_vl_stage2.yaml \
+  --checkpoint astraq-vl-stage2/checkpoints/checkpoint-2526 \
   --image your_astro_image.jpg \
   --prompt "What type of object is this and what is notable about it?" \
   --temperature 0
 ```
 
 Pass the Stage-2 **config** so the LoRA modules are built before the adapter weights load; the loader
-then restores both the connector and the LoRA automatically. The bundled
-`predictions_test_stage2.jsonl` holds the held-out outputs with their reference captions.
+then restores both the connector and the LoRA automatically. Caption-only predictions are in the
+Phase 0 archive; combined caption + QA predictions are in the full-heldout archive.
 
 ## Capabilities & limitations
 
 Stage 2 fine-tunes the LLM (LoRA) jointly with the connector, so — unlike Stage-1 — the language
 model itself learns from the QA pairs rather than improvising specifics from its frozen prior. The
 intended effect is **fewer hallucinated fine details** (catalog numbers, instruments, dates) on
-question-answering prompts, on top of Stage-1's coarse visual grounding. Compare the bundled
-`predictions_test_stage2.jsonl` with Stage-1's `predictions_test_ep3.jsonl` (held out, same images)
-to see the difference.
+question-answering prompts, on top of Stage-1's coarse visual grounding. Compare Stage 2's
+`predictions_full_heldout.jsonl` with the corresponding Stage-1 held-out predictions to inspect the
+difference on the same held-out split.
 
 Limitations carried over from the design: CLIP's 224×224 input discards fine astronomical detail;
 the base LLM is small (1.5B); and LoRA is a low-rank adaptation, not a full fine-tune. Evaluation is
@@ -142,9 +156,9 @@ a held-out generation set, not a full quantitative benchmark — read results qu
 
 ## Reproduction
 
-The bundle's `REPRODUCE.md` pins the exact code commit, base models, the seeded dataset-build
-command, the training command, and package versions (`torch`, `transformers`, `peft`). The split is
-seeded, so the build reproduces the exact train/test partition.
+The full-heldout evaluation archive contains `REPRODUCE_FULL_HELDOUT.md`, the Stage-2 config, and
+the exact `test.json` split used for that evaluation. The split is seeded, so the build command below
+reproduces the train/test partition.
 
 ```
 prereq: Stage-1 connector checkpoint-3789 (grKnight/astraq-vl-stage1 ep3 bundle)
@@ -161,4 +175,3 @@ eval:   python scripts/batch_inference.py --config configs/finetune_astraq_vl_st
 - **Base models:** Qwen2.5-1.5B-Instruct (Apache-2.0), CLIP ViT-L/14 (OpenAI, MIT).
 - **Builds on:** [AstraQ-VL Stage-1](https://huggingface.co/grKnight/astraq-vl-stage1) and the
   AstroLLaVA work ([arXiv:2504.08583](https://arxiv.org/abs/2504.08583)).
-```

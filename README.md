@@ -200,9 +200,9 @@ predictions, the training config, the `test.json` split, and a `REPRODUCE.md`:
 
 | Bundle | Checkpoint | |
 |--------|-----------|--|
-| [`astraq-vl-stage1-ep3.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
-| [`astraq-vl-stage1-ep2.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
-| [`astraq-vl-stage1-ep1.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/astraq-vl-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
+| [`astraq-vl-stage1-ep3.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/checkpoints/standard/astraq-vl-stage1-ep3.zip) | `checkpoint-3789` (epoch 3, final) | **recommended** |
+| [`astraq-vl-stage1-ep2.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/checkpoints/standard/astraq-vl-stage1-ep2.zip) | `checkpoint-2500` (≈ epoch 2) | |
+| [`astraq-vl-stage1-ep1.zip`](https://huggingface.co/grKnight/astraq-vl-stage1/blob/main/checkpoints/standard/astraq-vl-stage1-ep1.zip) | `checkpoint-1300` (≈ epoch 1) | |
 
 Each checkpoint is the connector only (`connector.safetensors`, ~16 MB) plus optimizer state. It
 is **not** a standalone `transformers` model — it requires this repository's code and the two base
@@ -328,22 +328,22 @@ The AstraQ-VL Stage-2 model trained with this codebase is published on the Huggi
 
 **https://huggingface.co/grKnight/astraq-vl-stage2**
 
-A single bundle
-[`astraq-vl-stage2.zip`](https://huggingface.co/grKnight/astraq-vl-stage2/blob/main/astraq-vl-stage2.zip)
-holds the final checkpoint (`checkpoint-2526`: `connector.safetensors` **+** `lora/adapter_model.safetensors`
-& `adapter_config.json`), the **held-out** predictions (`predictions_test_stage2.jsonl`), the training
-config, the `test.json` split, and a `REPRODUCE.md`. Like Stage-1 it is **not** a standalone
-`transformers` model — it needs this repo's code, the two base models (auto-downloaded), and `peft`.
+The repository publishes checkpoints every 200 steps and the final checkpoint at
+[`checkpoints/checkpoint-2526/`](https://huggingface.co/grKnight/astraq-vl-stage2/tree/main/checkpoints/checkpoint-2526).
+It contains `connector.safetensors`, the LoRA adapter under `lora/`, metadata, and training state.
+Evaluation artifacts and metrics are grouped under [`evaluations/`](https://huggingface.co/grKnight/astraq-vl-stage2/tree/main/evaluations)
+and [`metrics/`](https://huggingface.co/grKnight/astraq-vl-stage2/tree/main/metrics). Like Stage-1,
+the checkpoint is **not** a standalone `transformers` model: it needs this repository's code, both
+base models, and `peft`.
 
 ```bash
-# download + unzip
-hf download grKnight/astraq-vl-stage2 astraq-vl-stage2.zip --local-dir .
-unzip astraq-vl-stage2.zip -d ckpt2
+# download the final checkpoint directory
+hf download grKnight/astraq-vl-stage2 --include "checkpoints/checkpoint-2526/**" --local-dir astraq-vl-stage2
 
 # answer a question about an image (CLIP + Qwen auto-download; peft loads the LoRA adapter)
 python inference.py \
-  --config ckpt2/finetune_astraq_vl_stage2.yaml \
-  --checkpoint ckpt2/checkpoint-2526 \
+  --config configs/finetune_astraq_vl_stage2.yaml \
+  --checkpoint astraq-vl-stage2/checkpoints/checkpoint-2526 \
   --image your_astro_image.jpg \
   --prompt "What type of object is this and what is notable about it?" \
   --temperature 0
