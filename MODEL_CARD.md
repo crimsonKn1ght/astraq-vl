@@ -169,4 +169,4 @@ If you use AstraQ-VL, this checkpoint, or its evaluation artifacts, please cite:
 - **Training data:** [`UniverseTBD/AstroLLaVA_convos`](https://huggingface.co/datasets/UniverseTBD/AstroLLaVA_convos)
   (CC-BY-SA-4.0); imagery from NASA APOD, ESO, and NASA/ESA Hubble.
 - **Base models:** Qwen2.5-1.5B-Instruct (Apache-2.0), CLIP ViT-L/14 (OpenAI, MIT).
-- Built on the AstroLLaVA work ([arXiv:2504.08583](https://arxiv.org/abs/2504.08583)).
+- Built on the AstroLLaVA work.

@@ -192,4 +192,4 @@ If you use AstraQ-VL, this checkpoint, or its evaluation artifacts, please cite:
   (CC-BY-SA-4.0); imagery from NASA APOD, ESO, and NASA/ESA Hubble.
 - **Base models:** Qwen2.5-1.5B-Instruct (Apache-2.0), CLIP ViT-L/14 (OpenAI, MIT).
 - **Builds on:** [AstraQ-VL Stage-1](https://huggingface.co/grKnight/astraq-vl-stage1) and the
-  AstroLLaVA work ([arXiv:2504.08583](https://arxiv.org/abs/2504.08583)).
+  AstroLLaVA work.
