@@ -8,6 +8,7 @@ from vlm_model.vlm import VLMForCausalLM
 from vlm_model.utils import IMAGE_TOKEN
 from data.image_processing import load_and_process_image
 from training.checkpoint import load_connector_checkpoint, load_lora_adapter
+from decode_utils import split_assistant_response
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,14 +82,8 @@ def run_inference(
             **generate_kwargs,
         )
 
-    response = tokenizer.decode(output_ids[0], skip_special_tokens=False)
-
-    if "<|im_start|>assistant\n" in response:
-        response = response.split("<|im_start|>assistant\n")[-1]
-    if "<|im_end|>" in response:
-        response = response.split("<|im_end|>")[0]
-
-    return response.strip()
+    decoded = tokenizer.decode(output_ids[0], skip_special_tokens=False)
+    return split_assistant_response(decoded)
 
 
 def main():

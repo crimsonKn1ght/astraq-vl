@@ -17,6 +17,7 @@ from typing import Any, Dict, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.generate_heldout_records import completed_ids, load_records, sample_records  # noqa: E402
+from decode_utils import response_leak_flags, trim_completion_ids  # noqa: E402
 
 
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -113,7 +114,7 @@ def generate_one(
         generated_ids = model.generate(**inputs, **generate_kwargs)
 
     generated_ids_trimmed = [
-        output_ids[len(input_ids) :]
+        trim_completion_ids(input_ids, output_ids)
         for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
     ]
     response = processor.batch_decode(
@@ -213,6 +214,9 @@ def main() -> None:
                     temperature=args.temperature,
                     device=args.device,
                 )
+                leak = response_leak_flags(row["response"], rec.get("prompt"))
+                if leak:
+                    row["leak_flag"] = leak
             except Exception as exc:  # noqa: BLE001 - keep long evals running
                 row["error"] = repr(exc)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

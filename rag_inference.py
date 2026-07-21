@@ -18,6 +18,7 @@ from data.image_processing import load_and_process_image
 from retrieval.base import BaseRetriever
 from ragcore.context_format import format_context, build_rag_conversation, SYSTEM_PROMPT
 from ragcore.model_loader import load_vlm_from_cfg
+from decode_utils import split_assistant_response
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,13 +28,9 @@ logger = logging.getLogger(__name__)
 
 
 def _decode_answer(tokenizer, output_ids) -> str:
-    """Strip the chat scaffolding from generated ids (mirrors inference.py:67-74)."""
-    response = tokenizer.decode(output_ids[0], skip_special_tokens=False)
-    if "<|im_start|>assistant\n" in response:
-        response = response.split("<|im_start|>assistant\n")[-1]
-    if "<|im_end|>" in response:
-        response = response.split("<|im_end|>")[0]
-    return response.strip()
+    """Strip the chat scaffolding from generated ids (shared with inference.py)."""
+    decoded = tokenizer.decode(output_ids[0], skip_special_tokens=False)
+    return split_assistant_response(decoded)
 
 
 def rag_answer(

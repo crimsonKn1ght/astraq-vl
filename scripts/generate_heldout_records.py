@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional, Set
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from decode_utils import response_leak_flags  # noqa: E402
+
 IMAGE_TOKEN = "<image>"
 
 
@@ -181,6 +183,9 @@ def main() -> None:
                     temperature=args.temperature,
                     device=args.device,
                 )
+                leak = response_leak_flags(row["response"], rec.get("prompt"))
+                if leak:
+                    row["leak_flag"] = leak
             except Exception as exc:  # noqa: BLE001 - keep long evals running
                 row["error"] = repr(exc)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

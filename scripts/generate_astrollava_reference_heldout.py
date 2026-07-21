@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional, Set
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.generate_heldout_records import completed_ids, load_records, sample_records  # noqa: E402
+from decode_utils import response_leak_flags, strip_prompt_if_echoed  # noqa: E402
 
 
 DEFAULT_MODEL_ID = "UniverseTBD/AstroLLaVA"
@@ -171,17 +172,12 @@ class OfficialLLaVABackend:
 
         # LLaVA's generate() decodes from inputs_embeds (the image token expands into
         # visual tokens), so it returns only the completion, with no echoed prompt --
-        # upstream run_llava.py decodes output_ids directly. Slicing input_ids.shape[1]
-        # tokens unconditionally would delete the answer's leading tokens (and empty out
-        # completions shorter than the prompt). Strip the prompt only under the legacy
-        # contract where output_ids actually begins with input_ids.
-        input_token_len = input_ids.shape[1]
-        if (
-            output_ids.shape[1] >= input_token_len
-            and (input_ids != output_ids[:, :input_token_len]).sum().item() == 0
-        ):
-            output_ids = output_ids[:, input_token_len:]
-        response = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        # upstream run_llava.py decodes output_ids directly. Unconditionally slicing the
+        # prompt length would delete the answer's leading tokens (and empty out
+        # completions shorter than the prompt). strip_prompt_if_echoed strips only under
+        # the legacy contract where output_ids actually begins with input_ids.
+        completion_ids = strip_prompt_if_echoed(input_ids[0].tolist(), output_ids[0].tolist())
+        response = self.tokenizer.batch_decode([completion_ids], skip_special_tokens=True)[0].strip()
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         if stop_str and response.endswith(stop_str):
             response = response[: -len(stop_str)].strip()
@@ -298,6 +294,9 @@ def main() -> None:
                     max_new_tokens=args.max_new_tokens,
                     temperature=args.temperature,
                 )
+                leak = response_leak_flags(row["response"], rec.get("prompt"))
+                if leak:
+                    row["leak_flag"] = leak
             except Exception as exc:  # noqa: BLE001 - keep long evals running
                 row["error"] = repr(exc)
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
