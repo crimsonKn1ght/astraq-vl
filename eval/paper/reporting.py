@@ -312,21 +312,21 @@ def cautious_comparison(
     favors_a = difference > 0 if higher_is_better else difference < 0
     favors_b = difference < 0 if higher_is_better else difference > 0
     if favors_a:
-        opening = f"Within {scope}, the {metric} point estimate favored {model_a} over {model_b}"
+        opening = f"Within {scope}, the {metric} point estimate was numerically higher for {model_a} than {model_b}"
     elif favors_b:
-        opening = f"Within {scope}, the {metric} point estimate favored {model_b} over {model_a}"
+        opening = f"Within {scope}, the {metric} point estimate was numerically higher for {model_b} than {model_a}"
     else:
         opening = f"Within {scope}, {model_a} and {model_b} had the same {metric} point estimate"
     values = (
-        f"{model_a}={score_a:.{precision}f}, {model_b}={score_b:.{precision}f}, "
-        f"difference ({model_a}-{model_b})={difference:.{precision}f}"
+        f"{model_a}={score_a:.{precision}g}, {model_b}={score_b:.{precision}g}, "
+        f"difference ({model_a}-{model_b})={difference:.{precision}g}"
     )
     if difference_ci is None:
         return f"{opening} ({values}). This descriptive result is specific to the evaluated data and protocol."
     lower, upper = (float(difference_ci[0]), float(difference_ci[1]))
     if not math.isfinite(lower) or not math.isfinite(upper) or lower > upper:
         raise ValueError("difference_ci must be a finite ordered pair")
-    interval = f"95% CI [{lower:.{precision}f}, {upper:.{precision}f}]"
+    interval = f"95% CI [{lower:.{precision}g}, {upper:.{precision}g}]"
     if lower <= 0.0 <= upper:
         conclusion = "The interval includes zero, so these data do not establish a clear difference."
     else:

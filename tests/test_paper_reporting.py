@@ -57,7 +57,7 @@ class ReportingTests(TestCase):
             difference_ci=(-0.01, 0.05),
             scope="the DeepSDO test split",
         )
-        self.assertIn("point estimate favored Stage 2", narrative)
+        self.assertIn("point estimate was numerically higher for Stage 2", narrative)
         self.assertIn("includes zero", narrative)
         self.assertIn("specific to the evaluated data and protocol", narrative)
         self.assertNotIn("objectively", narrative.casefold())

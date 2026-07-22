@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from eval.paper.model_backends import AstroLLaVAPaperBackend, _termination
+from eval.paper.model_backends import (
+    AstroLLaVAPaperBackend,
+    _termination,
+    internvl_dynamic_preprocess,
+)
 from scripts.paper_eval_worker import (
     create_deepsdo_smoke_fixtures,
     validate_generation_environment,
@@ -63,7 +67,15 @@ class PaperModelBackendContractTests(unittest.TestCase):
     def test_eos_at_exact_cap_is_not_misreported_as_truncation(self) -> None:
         self.assertEqual(_termination([4, 5, 2], 2, 3), "eos")
         self.assertEqual(_termination([4, 5, 6], 2, 3), "max_new_tokens")
-        self.assertEqual(_termination([4], [2, 3], 3), "stopped")
+        self.assertEqual(_termination([4], [2, 3], 3), "model_stop")
+
+    def test_internvl_square_image_uses_one_official_tile(self) -> None:
+        from PIL import Image
+
+        image = Image.new("RGB", (512, 512))
+        tiles = internvl_dynamic_preprocess(image, image_size=448, max_num=12)
+        self.assertEqual(len(tiles), 1)
+        self.assertEqual(tiles[0].size, (448, 448))
 
     def test_bf16_backend_rejects_cuda_without_bf16_support(self) -> None:
         observed = {

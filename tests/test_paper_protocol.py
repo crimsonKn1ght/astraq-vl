@@ -90,6 +90,23 @@ class PaperProtocolTests(unittest.TestCase):
     def test_canonical_hash_ignores_mapping_order(self) -> None:
         self.assertEqual(sha256_json({"b": 2, "a": 1}), sha256_json({"a": 1, "b": 2}))
 
+    def test_v3_conditions_and_fifth_baseline_are_frozen(self) -> None:
+        protocol = PaperProtocol.load(ROOT / "configs" / "paper_eval_v3.yaml")
+        self.assertEqual(
+            protocol.condition_ids("deepsdo"),
+            ("original_512", "concise_256"),
+        )
+        self.assertIn("internvl3_5_4b", protocol.selected_models("deepsdo"))
+        self.assertNotIn("internvl3_5_4b", protocol.selected_models("internal"))
+        self.assertNotEqual(
+            protocol.model_fingerprint("deepsdo", "astraq_stage2", "original_512"),
+            protocol.model_fingerprint("deepsdo", "astraq_stage2", "concise_256"),
+        )
+        self.assertEqual(
+            protocol.data["models"]["internvl3_5_4b"]["revision"],
+            "dbf19f04a6a6f2fb15821cc7ae738430a3580cf5",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

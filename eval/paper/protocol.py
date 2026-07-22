@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 import yaml
 
-from . import SCHEMA_VERSION
+from . import SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSIONS
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -60,6 +60,7 @@ BACKEND_GENERATION_FILES = {
     ),
     "qwen3_vl": (),
     "astrollava": (),
+    "internvl": (),
 }
 
 
@@ -103,9 +104,10 @@ def _require_sha(value: Any, context: str, length: int = 40) -> None:
 
 
 def validate_protocol(data: Mapping[str, Any]) -> None:
-    if data.get("schema_version") != SCHEMA_VERSION:
+    schema_version = data.get("schema_version")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ProtocolError(
-            f"schema_version must be {SCHEMA_VERSION}, got {data.get('schema_version')!r}"
+            f"schema_version must be one of {SUPPORTED_SCHEMA_VERSIONS}, got {schema_version!r}"
         )
 
     study = _require(data, "study", "protocol")
@@ -152,6 +154,29 @@ def validate_protocol(data: Mapping[str, Any]) -> None:
         64,
     )
     _require_sha(datasets["deepsdo"].get("archive_sha256"), "datasets.deepsdo.archive_sha256", 64)
+    if schema_version >= 3:
+        conditions = (generation.get("deepsdo") or {}).get("conditions")
+        if not isinstance(conditions, Mapping) or set(conditions) != {
+            "original_512",
+            "concise_256",
+        }:
+            raise ProtocolError(
+                "generation.deepsdo.conditions must define original_512 and concise_256"
+            )
+        for condition_id, condition in conditions.items():
+            prompt = str(condition.get("prompt") or "").strip()
+            if not prompt:
+                raise ProtocolError(
+                    f"generation.deepsdo.conditions.{condition_id}.prompt is required"
+                )
+            if int(condition.get("max_new_tokens") or 0) <= 0:
+                raise ProtocolError(
+                    f"generation.deepsdo.conditions.{condition_id}.max_new_tokens must be positive"
+                )
+            if condition.get("require_natural_termination") is not True:
+                raise ProtocolError(
+                    f"generation.deepsdo.conditions.{condition_id}.require_natural_termination must be true"
+                )
 
     for label, model in models.items():
         suites = model.get("suites") or []
@@ -223,7 +248,31 @@ class PaperProtocol:
             if suite in model.get("suites", [])
         }
 
-    def generation_suite_payload(self, suite: str) -> Dict[str, Any]:
+    def condition_ids(self, suite: str) -> tuple[str | None, ...]:
+        """Return generation conditions without changing the v2 layout."""
+
+        self._check_suite(suite)
+        conditions = (self.data["generation"].get(suite) or {}).get("conditions")
+        if not conditions:
+            return (None,)
+        return tuple(str(condition_id) for condition_id in conditions)
+
+    def condition_config(self, suite: str, condition_id: str | None) -> Dict[str, Any]:
+        self._check_suite(suite)
+        conditions = (self.data["generation"].get(suite) or {}).get("conditions")
+        if not conditions:
+            if condition_id is not None:
+                raise ProtocolError(f"Suite {suite!r} has no generation conditions")
+            return copy.deepcopy(self.data["generation"][suite])
+        if condition_id not in conditions:
+            raise ProtocolError(
+                f"Unknown condition {condition_id!r} for {suite!r}; expected one of {tuple(conditions)}"
+            )
+        return copy.deepcopy(conditions[str(condition_id)])
+
+    def generation_suite_payload(
+        self, suite: str, condition_id: str | None = None
+    ) -> Dict[str, Any]:
         """Return config values that can change GPU generation for one suite."""
 
         self._check_suite(suite)
@@ -236,12 +285,15 @@ class PaperProtocol:
             },
             "dataset": self.data["datasets"][suite],
             "generation_common": self.data["generation"]["common"],
-            "generation_suite": self.data["generation"][suite],
+            "condition_id": condition_id,
+            "generation_suite": self.condition_config(suite, condition_id),
             "models": self.selected_models(suite),
             "base_models": self.data["base_models"],
         }
 
-    def analysis_suite_payload(self, suite: str) -> Dict[str, Any]:
+    def analysis_suite_payload(
+        self, suite: str, condition_id: str | None = None
+    ) -> Dict[str, Any]:
         """Return analysis/report values without moving completed generation runs."""
 
         self._check_suite(suite)
@@ -268,7 +320,8 @@ class PaperProtocol:
             package_names = ("matplotlib",)
         return {
             "schema_version": self.data["schema_version"],
-            "generation_suite_sha256": self.suite_fingerprint(suite),
+            "condition_id": condition_id,
+            "generation_suite_sha256": self.suite_fingerprint(suite, condition_id),
             "scorers": {
                 name: self.data["scorers"][name]
                 for name in scorer_names
@@ -284,20 +337,22 @@ class PaperProtocol:
     # Backward-compatible name used by existing callers/tests. Its boundary is
     # deliberately generation-only so offline scoring changes never force GPU
     # inference to be repeated.
-    def suite_payload(self, suite: str) -> Dict[str, Any]:
-        return self.generation_suite_payload(suite)
+    def suite_payload(self, suite: str, condition_id: str | None = None) -> Dict[str, Any]:
+        return self.generation_suite_payload(suite, condition_id)
 
-    def suite_fingerprint(self, suite: str) -> str:
-        return sha256_json(self.generation_suite_payload(suite))
+    def suite_fingerprint(self, suite: str, condition_id: str | None = None) -> str:
+        return sha256_json(self.generation_suite_payload(suite, condition_id))
 
-    def analysis_fingerprint(self, suite: str) -> str:
-        return sha256_json(self.analysis_suite_payload(suite))
+    def analysis_fingerprint(self, suite: str, condition_id: str | None = None) -> str:
+        return sha256_json(self.analysis_suite_payload(suite, condition_id))
 
-    def model_payload(self, suite: str, model_label: str) -> Dict[str, Any]:
+    def model_payload(
+        self, suite: str, model_label: str, condition_id: str | None = None
+    ) -> Dict[str, Any]:
         models = self.selected_models(suite)
         if model_label not in models:
             raise ProtocolError(f"Model {model_label!r} is not enabled for suite {suite!r}")
-        payload = self.generation_suite_payload(suite)
+        payload = self.generation_suite_payload(suite, condition_id)
         payload["models"] = {model_label: models[model_label]}
         environment_name = models[model_label]["environment"]
         payload["environment"] = {
@@ -305,8 +360,10 @@ class PaperProtocol:
         }
         return payload
 
-    def model_fingerprint(self, suite: str, model_label: str) -> str:
-        return sha256_json(self.model_payload(suite, model_label))
+    def model_fingerprint(
+        self, suite: str, model_label: str, condition_id: str | None = None
+    ) -> str:
+        return sha256_json(self.model_payload(suite, model_label, condition_id))
 
     def generation_implementation_payload(
         self, model_label: str, repo_root: str | Path
@@ -355,11 +412,14 @@ class PaperProtocol:
         model_label: str,
         records_sha256: str,
         repo_root: str | Path,
+        condition_id: str | None = None,
     ) -> str:
         _require_sha(records_sha256, "records_sha256", 64)
         return sha256_json(
             {
-                "model_generation_config_sha256": self.model_fingerprint(suite, model_label),
+                "model_generation_config_sha256": self.model_fingerprint(
+                    suite, model_label, condition_id
+                ),
                 "records_sha256": records_sha256,
                 "implementation": self.generation_implementation_payload(model_label, repo_root),
             }
@@ -372,15 +432,23 @@ class PaperProtocol:
         records_sha256: str,
         repo_root: str | Path,
         root: str | Path | None = None,
+        condition_id: str | None = None,
     ) -> Path:
         effective = self.effective_model_fingerprint(
-            suite, model_label, records_sha256, repo_root
+            suite, model_label, records_sha256, repo_root, condition_id
         )
-        return self.output_dir(suite, root) / model_label / effective[:16]
+        return self.output_dir(suite, root, condition_id) / model_label / effective[:16]
 
-    def output_dir(self, suite: str, root: str | Path | None = None) -> Path:
+    def output_dir(
+        self,
+        suite: str,
+        root: str | Path | None = None,
+        condition_id: str | None = None,
+    ) -> Path:
         base = Path(root or self.data["runtime"]["output_root"])
-        return base / suite / self.suite_fingerprint(suite)[:16]
+        if condition_id is None:
+            return base / suite / self.suite_fingerprint(suite, condition_id)[:16]
+        return base / suite / condition_id / self.suite_fingerprint(suite, condition_id)[:16]
 
     def astraq_architecture(self, model_label: str) -> Dict[str, Any]:
         model = self.data["models"].get(model_label)

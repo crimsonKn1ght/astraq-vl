@@ -74,6 +74,8 @@ class BootstrapTests(TestCase):
         self.assertAlmostEqual(result.estimate, 1.0)
         self.assertAlmostEqual(result.lower, 1.0)
         self.assertAlmostEqual(result.upper, 1.0)
+        self.assertIsNotNone(result.two_sided_p_value)
+        self.assertLess(float(result.two_sided_p_value), 0.01)
 
     def test_callback_recomputes_corpus_bleu_each_replicate(self) -> None:
         left = [

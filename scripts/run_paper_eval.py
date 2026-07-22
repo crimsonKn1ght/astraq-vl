@@ -27,6 +27,7 @@ from eval.paper.artifacts import (  # noqa: E402
     git_state,
     read_jsonl,
     sha256_file,
+    text_hash,
     write_checksum_file,
     write_json_atomic,
 )
@@ -51,6 +52,44 @@ from eval.paper.records import canonicalize_llava, write_records  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "scripts" / "paper_eval_worker.py"
+RunKey = tuple[str, str | None]
+
+
+def canonical_records_path(
+    protocol: PaperProtocol,
+    data_root: str | Path,
+    suite: str,
+    condition_id: str | None,
+) -> Path:
+    root = Path(data_root) / suite
+    if condition_id is None:
+        return root / "records.jsonl"
+    return root / "conditions" / condition_id / "records.jsonl"
+
+
+def selected_conditions(
+    protocol: PaperProtocol,
+    suites: Sequence[str],
+    requested: str,
+) -> Dict[str, list[str | None]]:
+    available = {
+        condition_id
+        for suite in suites
+        for condition_id in protocol.condition_ids(suite)
+        if condition_id is not None
+    }
+    selected_non_null: set[str] | None = None
+    if requested != "all":
+        selected_non_null = set(parse_csv_selection(requested, available))
+    result: Dict[str, list[str | None]] = {}
+    for suite in suites:
+        values = list(protocol.condition_ids(suite))
+        if selected_non_null is not None and values != [None]:
+            values = [value for value in values if value in selected_non_null]
+        if not values:
+            raise ProtocolError(f"No requested conditions are enabled for suite {suite}")
+        result[suite] = values
+    return result
 
 
 def _internal_image_state(
@@ -82,6 +121,21 @@ def _available_disk_gib(path: Path) -> float:
     while not target.exists() and target != target.parent:
         target = target.parent
     return shutil.disk_usage(target).free / (1024**3)
+
+
+def _quota_report(path: Path) -> Dict[str, Any]:
+    """Best-effort quota diagnostics; absence of quota tooling is not an error."""
+
+    resolved = path.resolve()
+    for command in (["quota", "-s"], ["xfs_quota", "-x", "-c", "report -h", str(resolved)]):
+        try:
+            output = subprocess.check_output(
+                command, text=True, stderr=subprocess.STDOUT, timeout=10
+            )
+            return {"command": command, "output": output.splitlines()}
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue
+    return {"available": False}
 
 
 def _ram_gib() -> float | None:
@@ -141,6 +195,8 @@ def preflight(protocol: PaperProtocol, args: argparse.Namespace) -> Dict[str, An
         "protocol_sha256": protocol.fingerprint,
         "git": state,
         "disk_free_gib": round(disk, 2),
+        "estimated_asset_download_gib": runtime.get("estimated_asset_download_gib"),
+        "quota": _quota_report(Path(args.asset_root)),
         "ram_gib": None if ram is None else round(ram, 2),
         "gpus": gpu,
         "retrieval": False,
@@ -304,16 +360,24 @@ def prepare_internal(protocol: PaperProtocol, args: argparse.Namespace) -> Path:
     return records_path
 
 
-def prepare_deepsdo(protocol: PaperProtocol, args: argparse.Namespace) -> Path:
+def prepare_deepsdo(
+    protocol: PaperProtocol,
+    condition_ids: Sequence[str | None],
+    args: argparse.Namespace,
+) -> Dict[RunKey, Path]:
     cfg = protocol.data["datasets"]["deepsdo"]
     root = Path(args.data_root).resolve() / "deepsdo"
     archive = root / "raw" / "kasi_deepsdo_desc_dataset.tar.gz"
     extracted = root / "extracted"
     llava = root / "llava"
-    records_path = root / "records.jsonl"
     if args.dry_run:
         print(f"PLAN download/verify DeepSDO {cfg['archive_sha256']} -> {root}")
-        return records_path
+        return {
+            ("deepsdo", condition_id): canonical_records_path(
+                protocol, args.data_root, "deepsdo", condition_id
+            )
+            for condition_id in condition_ids
+        }
     command = [
         sys.executable,
         "scripts/prepare_deepsdo.py",
@@ -331,8 +395,26 @@ def prepare_deepsdo(protocol: PaperProtocol, args: argparse.Namespace) -> Path:
     records = canonicalize_llava(llava / "test.json", extracted / "desc_images", "deepsdo")
     if len(records) != int(cfg["expected_records"]):
         raise SystemExit(f"DeepSDO prepared {len(records)} records; expected {cfg['expected_records']}")
-    write_records(records_path, records)
-    return records_path
+    outputs: Dict[RunKey, Path] = {}
+    for condition_id in condition_ids:
+        condition = protocol.condition_config("deepsdo", condition_id)
+        condition_records = []
+        for source in records:
+            row = dict(source)
+            row["prompt"] = str(condition.get("prompt") or row.get("prompt") or "")
+            row["prompt_sha256"] = text_hash(row["prompt"])
+            if condition_id is not None:
+                row["condition_id"] = condition_id
+                row["require_natural_termination"] = bool(
+                    condition.get("require_natural_termination", False)
+                )
+            condition_records.append(row)
+        records_path = canonical_records_path(
+            protocol, args.data_root, "deepsdo", condition_id
+        )
+        write_records(records_path, condition_records)
+        outputs[("deepsdo", condition_id)] = records_path
+    return outputs
 
 
 def lock_astrovlbench(protocol: PaperProtocol, args: argparse.Namespace) -> Path:
@@ -374,16 +456,19 @@ def prepare_astrovlbench(protocol: PaperProtocol, args: argparse.Namespace) -> P
 
 
 def prepare_suites(
-    protocol: PaperProtocol, suites: Sequence[str], args: argparse.Namespace
-) -> Dict[str, Path]:
-    result: Dict[str, Path] = {}
+    protocol: PaperProtocol,
+    suites: Sequence[str],
+    conditions: Mapping[str, Sequence[str | None]],
+    args: argparse.Namespace,
+) -> Dict[RunKey, Path]:
+    result: Dict[RunKey, Path] = {}
     for suite in suites:
         if suite == "internal":
-            result[suite] = prepare_internal(protocol, args)
+            result[(suite, None)] = prepare_internal(protocol, args)
         elif suite == "deepsdo":
-            result[suite] = prepare_deepsdo(protocol, args)
+            result.update(prepare_deepsdo(protocol, conditions[suite], args))
         else:
-            result[suite] = prepare_astrovlbench(protocol, args)
+            result[(suite, None)] = prepare_astrovlbench(protocol, args)
     return result
 
 
@@ -410,7 +495,7 @@ def download_assets(
     args: argparse.Namespace,
 ) -> Path:
     labels = sorted({label for models in suite_models.values() for label in models})
-    return materialize_model_assets(
+    manifest = materialize_model_assets(
         protocol,
         labels,
         args.asset_root,
@@ -418,6 +503,14 @@ def download_assets(
         dry_run=args.dry_run,
         suites=suite_models.keys(),
     )
+    if not args.dry_run:
+        available = _available_disk_gib(Path(args.asset_root))
+        print(f"Post-download free disk: {available:.2f} GiB", flush=True)
+        if available < 5.0:
+            raise SystemExit(
+                "Less than 5 GiB remains after asset download; free persistent storage before inference."
+            )
+    return manifest
 
 
 def _worker_python(model: Mapping[str, Any]) -> str:
@@ -428,59 +521,69 @@ def _worker_python(model: Mapping[str, Any]) -> str:
 
 def run_models(
     protocol: PaperProtocol,
-    records: Mapping[str, Path],
+    records: Mapping[RunKey, Path],
     suite_models: Mapping[str, Sequence[str]],
     asset_manifest: Path,
     args: argparse.Namespace,
 ) -> None:
     for suite, labels in suite_models.items():
-        suite_root = protocol.output_dir(suite, args.output_root)
-        records_path = Path(records[suite])
-        records_hash = sha256_file(records_path) if records_path.is_file() else None
-        for label in labels:
-            model = protocol.data["models"][label]
-            output = (
-                protocol.model_output_dir(
-                    suite, label, str(records_hash), ROOT, args.output_root
+        condition_ids = [condition_id for key_suite, condition_id in records if key_suite == suite]
+        for condition_id in condition_ids:
+            suite_root = protocol.output_dir(suite, args.output_root, condition_id)
+            records_path = Path(records[(suite, condition_id)])
+            records_hash = sha256_file(records_path) if records_path.is_file() else None
+            for label in labels:
+                model = protocol.data["models"][label]
+                output = (
+                    protocol.model_output_dir(
+                        suite,
+                        label,
+                        str(records_hash),
+                        ROOT,
+                        args.output_root,
+                        condition_id,
+                    )
+                    if records_hash
+                    else suite_root / label / "locked-after-dataset-prepare"
                 )
-                if records_hash
-                else suite_root / label / "locked-after-dataset-prepare"
-            )
-            base = [
-                _worker_python(model),
-                str(WORKER),
-                "--protocol",
-                str(protocol.path),
-                "--suite",
-                suite,
-                "--model",
-                label,
-                "--records",
-                str(records[suite]),
-                "--asset-manifest",
-                str(asset_manifest),
-                "--output-dir",
-                str(output),
-                "--device",
-                args.device,
-                "--max-attempts",
-                str(args.max_attempts),
-            ]
-            if args.resume:
-                base.append("--resume")
-            if args.diagnostic_allow_partial:
-                base.append("--diagnostic-allow-partial")
-            if args.dry_run:
-                print(f"PLAN smoke then full inference: {suite}/{label} -> {output}")
-                continue
-            if not args.skip_smoke:
-                smoke = [*base, "--smoke", "--limit", str(args.smoke_samples), "--diagnostic-allow-partial"]
-                if "--resume" not in smoke and output.exists() and any(output.iterdir()):
-                    smoke.append("--resume")
-                run(smoke, dry_run=False)
-                if "--resume" not in base:
+                base = [
+                    _worker_python(model),
+                    str(WORKER),
+                    "--protocol",
+                    str(protocol.path),
+                    "--suite",
+                    suite,
+                    "--model",
+                    label,
+                    "--records",
+                    str(records_path),
+                    "--asset-manifest",
+                    str(asset_manifest),
+                    "--output-dir",
+                    str(output),
+                    "--device",
+                    args.device,
+                    "--max-attempts",
+                    str(args.max_attempts),
+                ]
+                if condition_id is not None:
+                    base.extend(["--condition", condition_id])
+                if args.resume:
                     base.append("--resume")
-            run(base, dry_run=False)
+                if args.diagnostic_allow_partial:
+                    base.append("--diagnostic-allow-partial")
+                display = f"{suite}/{condition_id}/{label}" if condition_id else f"{suite}/{label}"
+                if args.dry_run:
+                    print(f"PLAN smoke then full inference: {display} -> {output}")
+                    continue
+                if not args.skip_smoke:
+                    smoke = [*base, "--smoke", "--limit", str(args.smoke_samples), "--diagnostic-allow-partial"]
+                    if "--resume" not in smoke and output.exists() and any(output.iterdir()):
+                        smoke.append("--resume")
+                    run(smoke, dry_run=False)
+                    if "--resume" not in base:
+                        base.append("--resume")
+                run(base, dry_run=False)
 
 
 def analyze(protocol: PaperProtocol, suites: Sequence[str], args: argparse.Namespace) -> Path:
@@ -496,6 +599,7 @@ def analyze(protocol: PaperProtocol, suites: Sequence[str], args: argparse.Names
         Path(args.output_root),
         paper_mode=not args.diagnostic_allow_partial,
         data_root=Path(args.data_root),
+        conditions=selected_conditions(protocol, suites, getattr(args, "conditions", "all")),
     )
 
 
@@ -516,14 +620,15 @@ def stage_audit_inputs(protocol: PaperProtocol, args: argparse.Namespace) -> Pat
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
 
-    copy(protocol.path, "protocol/configs/paper_eval_v2.yaml")
+    copy(protocol.path, f"protocol/configs/{protocol.path.name}")
     for name in (
         "requirements-paper-modern.txt",
         "requirements-paper-astrollava.txt",
         "requirements-astrollava-reference.txt",
     ):
         copy(ROOT / name, f"protocol/{name}")
-    copy(ROOT / "docs" / "paper_evaluation_v2.md", "protocol/paper_evaluation_v2.md")
+    documentation = ROOT / "docs" / f"paper_evaluation_v{protocol.data['schema_version']}.md"
+    copy(documentation, f"protocol/{documentation.name}")
     copy(Path(args.asset_root) / "asset_manifest.json", "assets/asset_manifest.json")
     copy(output_root / "preflight.json", "environment/preflight.json")
 
@@ -540,6 +645,13 @@ def stage_audit_inputs(protocol: PaperProtocol, args: argparse.Namespace) -> Pat
     deepsdo = data_root / "deepsdo"
     for name in ("records.jsonl",):
         copy(deepsdo / name, f"datasets/deepsdo/{name}")
+    conditions_root = deepsdo / "conditions"
+    if conditions_root.is_dir():
+        for source in conditions_root.rglob("records.jsonl"):
+            copy(
+                source,
+                f"datasets/deepsdo/{source.relative_to(deepsdo).as_posix()}",
+            )
     for source in (deepsdo / "llava").glob("*") if (deepsdo / "llava").is_dir() else ():
         if source.is_file() and source.suffix.lower() in {".json", ".jsonl", ".csv", ".md", ".txt"}:
             copy(source, f"datasets/deepsdo/llava/{source.name}")
@@ -557,6 +669,7 @@ def stage_audit_inputs(protocol: PaperProtocol, args: argparse.Namespace) -> Pat
         "bash scripts/runpod/run_paper_eval.sh \\",
         f"  --suites {shlex.quote(str(selected_suites))} \\",
         f"  --models {shlex.quote(str(selected_models))} \\",
+        f"  --conditions {shlex.quote(str(getattr(args, 'conditions', 'all')))} \\",
         f"  --output-root {shlex.quote(str(args.output_root))} \\",
         f"  --data-root {shlex.quote(str(args.data_root))} \\",
         f"  --asset-root {shlex.quote(str(args.asset_root))} \\",
@@ -588,11 +701,21 @@ def package(protocol: PaperProtocol, reports: Path, args: argparse.Namespace) ->
     from eval.paper.analysis import report_output_dir
 
     selected_suites = parse_csv_selection(args.suites, SUPPORTED_SUITES)
+    condition_map = selected_conditions(
+        protocol, selected_suites, getattr(args, "conditions", "all")
+    )
+    if protocol.data["schema_version"] >= 3 and "deepsdo" in selected_suites:
+        required_conditions = set(protocol.condition_ids("deepsdo"))
+        if set(condition_map["deepsdo"]) != required_conditions:
+            raise SystemExit(
+                "A v3 paper bundle requires every frozen DeepSDO condition"
+            )
     report_root = report_output_dir(
         protocol,
         selected_suites,
         args.output_root,
         args.data_root,
+        conditions=condition_map,
         repo_root=ROOT,
     )
     manifest_path = report_root / "results_manifest.json"
@@ -611,6 +734,26 @@ def package(protocol: PaperProtocol, reports: Path, args: argparse.Namespace) ->
             "Paper results suite set does not match --suites; rerun analyze with the same selection"
         )
     stage_audit_inputs(protocol, args)
+    if protocol.data.get("reporting", {}).get("require_completed_factuality_audit"):
+        audit_summary = Path(args.output_root) / "factuality_audit" / "summary.json"
+        if not audit_summary.is_file():
+            raise SystemExit(
+                "Completed factuality audit is required before packaging; run audit-prepare, "
+                "complete the reviewer/adjudication sheets, then run audit-summarize."
+            )
+        audit_value = json.loads(audit_summary.read_text(encoding="utf-8"))
+        if audit_value.get("complete") is not True:
+            raise SystemExit("Factuality audit summary is not marked complete")
+        if audit_value.get("protocol_sha256") != protocol.fingerprint:
+            raise SystemExit("Factuality audit summary does not match the current protocol")
+        expected_audit_rows = int(protocol.data["factuality_audit"]["images"]) * len(
+            protocol.selected_models("deepsdo")
+        )
+        if int(audit_value.get("candidate_rows") or 0) != expected_audit_rows:
+            raise SystemExit(
+                f"Factuality audit has {audit_value.get('candidate_rows')} rows; "
+                f"expected {expected_audit_rows}"
+            )
     write_checksum_file(report_root)
     bundle_root.mkdir(parents=True, exist_ok=True)
     output_root = Path(args.output_root).resolve()
@@ -625,30 +768,70 @@ def package(protocol: PaperProtocol, reports: Path, args: argparse.Namespace) ->
                 raise SystemExit(f"Required package evidence is missing: {source}")
             shutil.copytree(source, destination, symlinks=True)
 
+        deepsdo_prediction_rows = 0
         for suite in selected_suites:
-            records_path = Path(args.data_root) / suite / "records.jsonl"
-            if not records_path.is_file():
-                raise SystemExit(f"Canonical records are missing for packaging: {records_path}")
-            records_hash = sha256_file(records_path)
-            suite_root = protocol.output_dir(suite, output_root)
-            for model_label in protocol.selected_models(suite):
-                model_root = protocol.model_output_dir(
-                    suite,
-                    model_label,
-                    records_hash,
-                    ROOT,
-                    output_root,
+            for condition_id in condition_map[suite]:
+                records_path = canonical_records_path(
+                    protocol, args.data_root, suite, condition_id
                 )
-                copy_tree(
-                    model_root,
-                    current
-                    / suite
-                    / suite_root.name
-                    / model_label
-                    / model_root.name,
+                if not records_path.is_file():
+                    raise SystemExit(f"Canonical records are missing for packaging: {records_path}")
+                records_hash = sha256_file(records_path)
+                suite_root = protocol.output_dir(suite, output_root, condition_id)
+                for model_label in protocol.selected_models(suite):
+                    model_root = protocol.model_output_dir(
+                        suite,
+                        model_label,
+                        records_hash,
+                        ROOT,
+                        output_root,
+                        condition_id,
+                    )
+                    predictions_path = model_root / "predictions.jsonl"
+                    if not predictions_path.is_file():
+                        raise SystemExit(
+                            f"Canonical predictions are missing for packaging: {predictions_path}"
+                        )
+                    observed_rows = len(read_jsonl(predictions_path))
+                    expected_rows = len(read_jsonl(records_path))
+                    if protocol.data["schema_version"] >= 3:
+                        expected_rows = int(
+                            protocol.data["datasets"][suite].get("expected_records")
+                            or expected_rows
+                        )
+                    if observed_rows != expected_rows:
+                        raise SystemExit(
+                            f"{suite}/{condition_id}/{model_label} has {observed_rows} "
+                            f"canonical predictions; expected {expected_rows}"
+                        )
+                    if suite == "deepsdo":
+                        deepsdo_prediction_rows += observed_rows
+                    destination = current / suite
+                    if condition_id is not None:
+                        destination = destination / condition_id
+                    copy_tree(
+                        model_root,
+                        destination
+                        / suite_root.name
+                        / model_label
+                        / model_root.name,
+                    )
+        if protocol.data["schema_version"] >= 3 and "deepsdo" in selected_suites:
+            expected_total = (
+                int(protocol.data["datasets"]["deepsdo"]["expected_records"])
+                * len(protocol.selected_models("deepsdo"))
+                * len(protocol.condition_ids("deepsdo"))
+            )
+            if deepsdo_prediction_rows != expected_total:
+                raise SystemExit(
+                    f"DeepSDO v3 has {deepsdo_prediction_rows} canonical predictions; "
+                    f"expected exactly {expected_total}"
                 )
         copy_tree(report_root, current / "reports" / report_root.name)
         copy_tree(output_root / "audit_inputs", current / "audit_inputs")
+        audit_root = output_root / "factuality_audit"
+        if audit_root.is_dir():
+            copy_tree(audit_root, current / "factuality_audit")
         preflight_path = output_root / "preflight.json"
         if preflight_path.is_file():
             shutil.copy2(preflight_path, current / "preflight.json")
@@ -678,11 +861,23 @@ def parse_args() -> argparse.Namespace:
         "command",
         nargs="?",
         default="all",
-        choices=["all", "preflight", "prepare", "download", "smoke", "run", "analyze", "package"],
+        choices=[
+            "all",
+            "preflight",
+            "prepare",
+            "download",
+            "smoke",
+            "run",
+            "analyze",
+            "audit-prepare",
+            "audit-summarize",
+            "package",
+        ],
     )
-    parser.add_argument("--protocol", default="configs/paper_eval_v2.yaml")
+    parser.add_argument("--protocol", default="configs/paper_eval_v3.yaml")
     parser.add_argument("--suites", default="internal,deepsdo")
     parser.add_argument("--models", default="all")
+    parser.add_argument("--conditions", default="all")
     parser.add_argument("--output-root", default=None)
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--asset-root", default=None)
@@ -707,6 +902,7 @@ def main() -> None:
     args.data_root = args.data_root or protocol.data["runtime"]["data_root"]
     args.asset_root = args.asset_root or protocol.data["runtime"]["asset_root"]
     suites = parse_csv_selection(args.suites, SUPPORTED_SUITES)
+    condition_map = selected_conditions(protocol, suites, args.conditions)
     if args.lock_astrovlbench:
         lock = lock_astrovlbench(protocol, args)
         print(f"AstroVLBench lock: {lock}")
@@ -721,17 +917,31 @@ def main() -> None:
     if args.command == "preflight":
         return
     suite_models = models_for_suites(protocol, suites, args.models)
-    records: Dict[str, Path] = {
-        suite: Path(args.data_root) / suite / "records.jsonl" for suite in suites
+    records: Dict[RunKey, Path] = {
+        (suite, condition_id): canonical_records_path(
+            protocol, args.data_root, suite, condition_id
+        )
+        for suite in suites
+        for condition_id in condition_map[suite]
     }
     if args.command in {"all", "prepare"}:
-        records = prepare_suites(protocol, suites, args)
+        records = prepare_suites(protocol, suites, condition_map, args)
         if args.command == "prepare":
             return
     elif not args.dry_run:
         missing = [str(path) for path in records.values() if not path.is_file()]
         if missing:
             raise SystemExit("Prepared records are missing; run prepare first: " + ", ".join(missing))
+    if args.command in {"audit-prepare", "audit-summarize"}:
+        from scripts.deepsdo_factuality_audit import prepare_audit, summarize_audit
+
+        if "deepsdo" not in suites:
+            raise SystemExit("Factuality audit commands require --suites deepsdo")
+        if args.command == "audit-prepare":
+            prepare_audit(protocol, Path(args.data_root), Path(args.output_root), ROOT)
+        else:
+            summarize_audit(protocol, Path(args.output_root))
+        return
     asset_manifest = Path(args.asset_root) / "asset_manifest.json"
     if args.command in {"all", "download"}:
         asset_manifest = download_assets(protocol, suite_models, args)
@@ -746,28 +956,36 @@ def main() -> None:
             # Run_models normally follows smoke with full generation; invoke workers directly by
             # marking the command through a temporary dry/full choice is clearer for users.
             for suite, labels in suite_models.items():
-                suite_root = protocol.output_dir(suite, args.output_root)
-                records_path = Path(records[suite])
-                records_hash = sha256_file(records_path) if records_path.is_file() else None
-                for label in labels:
-                    model = protocol.data["models"][label]
-                    output = (
-                        protocol.model_output_dir(
-                            suite, label, str(records_hash), ROOT, args.output_root
+                for condition_id in condition_map[suite]:
+                    suite_root = protocol.output_dir(suite, args.output_root, condition_id)
+                    records_path = Path(records[(suite, condition_id)])
+                    records_hash = sha256_file(records_path) if records_path.is_file() else None
+                    for label in labels:
+                        model = protocol.data["models"][label]
+                        output = (
+                            protocol.model_output_dir(
+                                suite,
+                                label,
+                                str(records_hash),
+                                ROOT,
+                                args.output_root,
+                                condition_id,
+                            )
+                            if records_hash
+                            else suite_root / label / "locked-after-dataset-prepare"
                         )
-                        if records_hash
-                        else suite_root / label / "locked-after-dataset-prepare"
-                    )
-                    cmd = [
-                        _worker_python(model), str(WORKER), "--protocol", str(protocol.path),
-                        "--suite", suite, "--model", label, "--records", str(records[suite]),
-                        "--asset-manifest", str(asset_manifest), "--output-dir", str(output),
-                        "--device", args.device, "--smoke", "--limit", str(args.smoke_samples),
-                        "--diagnostic-allow-partial", "--max-attempts", str(args.max_attempts),
-                    ]
-                    if args.resume or output.exists():
-                        cmd.append("--resume")
-                    run(cmd, dry_run=args.dry_run)
+                        cmd = [
+                            _worker_python(model), str(WORKER), "--protocol", str(protocol.path),
+                            "--suite", suite, "--model", label, "--records", str(records_path),
+                            "--asset-manifest", str(asset_manifest), "--output-dir", str(output),
+                            "--device", args.device, "--smoke", "--limit", str(args.smoke_samples),
+                            "--diagnostic-allow-partial", "--max-attempts", str(args.max_attempts),
+                        ]
+                        if condition_id is not None:
+                            cmd.extend(["--condition", condition_id])
+                        if args.resume or output.exists():
+                            cmd.append("--resume")
+                        run(cmd, dry_run=args.dry_run)
             return
         run_models(protocol, records, suite_models, asset_manifest, args)
         args.skip_smoke = original_skip

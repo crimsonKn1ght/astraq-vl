@@ -5,8 +5,10 @@ import tempfile
 import unittest
 
 from eval.paper.analysis import (
+    _apply_holm_adjustment,
     _astro_hierarchy_intervals,
     _astro_paired_hierarchy_interval,
+    _deepsdo_completion_diagnostics,
     analysis_run_fingerprint,
     paired_metric_intervals,
     score_caption_rows,
@@ -19,6 +21,43 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PaperAnalysisTests(unittest.TestCase):
+    def test_holm_adjustment_is_monotone_within_metric(self) -> None:
+        rows = [
+            {"metric": "cider", "headline_comparison": True, "two_sided_p_value": 0.01},
+            {"metric": "cider", "headline_comparison": True, "two_sided_p_value": 0.03},
+            {"metric": "cider", "headline_comparison": True, "two_sided_p_value": 0.2},
+        ]
+        _apply_holm_adjustment(rows)
+        self.assertEqual(
+            [row["holm_adjusted_p_value"] for row in rows],
+            [0.03, 0.06, 0.2],
+        )
+
+    def test_deepsdo_completion_diagnostics_report_lengths_and_caps(self) -> None:
+        diagnostics = _deepsdo_completion_diagnostics(
+            {
+                "model": [
+                    {
+                        "response": "A complete caption.",
+                        "reference": "A caption.",
+                        "completion_token_count": 4,
+                        "termination_reason": "eos",
+                        "token_cap_hit": False,
+                    },
+                    {
+                        "response": "unfinished",
+                        "reference": "Another caption.",
+                        "completion_token_count": 8,
+                        "termination_reason": "max_new_tokens",
+                        "token_cap_hit": True,
+                    },
+                ]
+            },
+            "original_512",
+        )[0]
+        self.assertEqual(diagnostics["token_cap_hits"], 1)
+        self.assertEqual(diagnostics["completion_tokens_median"], 6)
+        self.assertEqual(diagnostics["possible_unfinished_outputs"], 1)
     def test_later_astro_lock_does_not_rehash_internal_deep_analysis_run(self) -> None:
         protocol = PaperProtocol.load(ROOT / "configs" / "paper_eval_v2.yaml")
         changed = copy.deepcopy(protocol.data)

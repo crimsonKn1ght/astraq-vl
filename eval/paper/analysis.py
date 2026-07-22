@@ -42,6 +42,17 @@ class AnalysisError(RuntimeError):
     pass
 
 
+def _unit_key(suite: str, condition_id: str | None) -> str:
+    return suite if condition_id is None else f"{suite}:{condition_id}"
+
+
+def _records_path(data_root: str | Path, suite: str, condition_id: str | None) -> Path:
+    root = Path(data_root) / suite
+    if condition_id is None:
+        return root / "records.jsonl"
+    return root / "conditions" / condition_id / "records.jsonl"
+
+
 def analysis_evidence_hashes(
     data_root: str | Path, suites: Sequence[str]
 ) -> Dict[str, str]:
@@ -77,10 +88,19 @@ def analysis_run_fingerprint(
     data_root: str | Path,
     *,
     repo_root: str | Path | None = None,
+    conditions: Mapping[str, Sequence[str | None]] | None = None,
 ) -> str:
     ordered_suites = tuple(sorted(str(suite) for suite in suites))
-    if set(ordered_suites) != set(record_hashes):
-        raise AnalysisError("Analysis record hashes do not match the selected suite set")
+    condition_map = conditions or {
+        suite: list(protocol.condition_ids(suite)) for suite in ordered_suites
+    }
+    expected_units = {
+        _unit_key(suite, condition_id)
+        for suite in ordered_suites
+        for condition_id in condition_map[suite]
+    }
+    if expected_units != set(record_hashes):
+        raise AnalysisError("Analysis record hashes do not match the selected suite/condition set")
     root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
     implementation_paths = {
         "eval/paper/analysis.py",
@@ -105,9 +125,15 @@ def analysis_run_fingerprint(
             "study_id": protocol.study_id,
             "suites": list(ordered_suites),
             "suite_analysis_hashes": {
-                suite: protocol.analysis_fingerprint(suite) for suite in ordered_suites
+                _unit_key(suite, condition_id): protocol.analysis_fingerprint(
+                    suite, condition_id
+                )
+                for suite in ordered_suites
+                for condition_id in condition_map[suite]
             },
-            "record_hashes": {suite: record_hashes[suite] for suite in ordered_suites},
+            "record_hashes": {
+                key: record_hashes[key] for key in sorted(record_hashes)
+            },
             "evidence_hashes": analysis_evidence_hashes(data_root, ordered_suites),
             "implementation": implementation,
         }
@@ -121,15 +147,25 @@ def report_output_dir(
     data_root: str | Path,
     *,
     repo_root: str | Path | None = None,
+    conditions: Mapping[str, Sequence[str | None]] | None = None,
 ) -> Path:
+    condition_map = conditions or {
+        suite: list(protocol.condition_ids(suite)) for suite in suites
+    }
     hashes = {}
     for suite in suites:
-        records_path = Path(data_root) / suite / "records.jsonl"
-        if not records_path.is_file():
-            raise AnalysisError(f"Missing canonical records for {suite}: {records_path}")
-        hashes[str(suite)] = sha256_file(records_path)
+        for condition_id in condition_map[suite]:
+            records_path = _records_path(data_root, suite, condition_id)
+            if not records_path.is_file():
+                raise AnalysisError(f"Missing canonical records for {suite}: {records_path}")
+            hashes[_unit_key(str(suite), condition_id)] = sha256_file(records_path)
     fingerprint = analysis_run_fingerprint(
-        protocol, suites, hashes, data_root, repo_root=repo_root
+        protocol,
+        suites,
+        hashes,
+        data_root,
+        repo_root=repo_root,
+        conditions=condition_map,
     )
     return Path(output_root) / "reports" / fingerprint[:16]
 
@@ -148,10 +184,11 @@ def _model_predictions(
     records_sha256: str,
     *,
     paper_mode: bool,
+    condition_id: str | None = None,
 ) -> list[Dict[str, Any]]:
     repo_root = Path(__file__).resolve().parents[2]
     model_root = protocol.model_output_dir(
-        suite, model_label, records_sha256, repo_root, output_root
+        suite, model_label, records_sha256, repo_root, output_root, condition_id
     )
     path = model_root / "predictions.jsonl"
     manifest_path = model_root / "run_manifest.json"
@@ -159,12 +196,14 @@ def _model_predictions(
         raise AnalysisError(f"Missing completed {suite}/{model_label} prediction artifacts")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_hash = protocol.effective_model_fingerprint(
-        suite, model_label, records_sha256, repo_root
+        suite, model_label, records_sha256, repo_root, condition_id
     )
     if manifest.get("model_protocol_hash") != expected_hash:
         raise AnalysisError(f"{suite}/{model_label} manifest protocol hash mismatch")
     if manifest.get("records_file_sha256") != records_sha256:
         raise AnalysisError(f"{suite}/{model_label} canonical records hash mismatch")
+    if manifest.get("condition_id") != condition_id:
+        raise AnalysisError(f"{suite}/{model_label} condition ID mismatch")
     if manifest.get("predictions_sha256") != sha256_file(path):
         raise AnalysisError(f"{suite}/{model_label} predictions checksum mismatch")
     if paper_mode and not (manifest.get("completion") or {}).get("complete"):
@@ -683,6 +722,87 @@ def _subgroup_table(
     return rows
 
 
+def _apply_holm_adjustment(rows: Sequence[MutableMapping[str, Any]]) -> None:
+    """Add Holm-adjusted p-values to predeclared comparisons, per metric."""
+
+    grouped: Dict[str, list[MutableMapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("headline_comparison") and row.get("two_sided_p_value") is not None:
+            grouped[str(row.get("metric"))].append(row)
+        else:
+            row["holm_adjusted_p_value"] = None
+    for group in grouped.values():
+        ordered = sorted(group, key=lambda row: float(row["two_sided_p_value"]))
+        running = 0.0
+        total = len(ordered)
+        for index, row in enumerate(ordered):
+            adjusted = min(
+                1.0,
+                (total - index) * float(row["two_sided_p_value"]),
+            )
+            running = max(running, adjusted)
+            row["holm_adjusted_p_value"] = running
+
+
+def _deepsdo_completion_diagnostics(
+    predictions_by_model: Mapping[str, Sequence[Mapping[str, Any]]],
+    condition_id: str | None,
+) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    for model_label, predictions in predictions_by_model.items():
+        responses = [str(row.get("response") or "").strip() for row in predictions]
+        token_counts = [int(row.get("completion_token_count") or 0) for row in predictions]
+        word_counts = [len(response.split()) for response in responses]
+        reference_words = sum(
+            len(str(row.get("reference") or "").split()) for row in predictions
+        )
+        normalized = [re.sub(r"\s+", " ", response.casefold()).strip() for response in responses]
+        repeated = sum(count - 1 for count in Counter(normalized).values() if count > 1)
+        termination = Counter(
+            "model_stop" if row.get("termination_reason") == "stopped" else str(row.get("termination_reason") or "unknown")
+            for row in predictions
+        )
+        unfinished = sum(
+            bool(row.get("token_cap_hit"))
+            or bool(response and not re.search(r"[.!?\]\)]$", response))
+            for row, response in zip(predictions, responses)
+        )
+        rows.append(
+            {
+                "condition_id": condition_id,
+                "model": model_label,
+                "n": len(predictions),
+                "eos_count": termination.get("eos", 0),
+                "model_stop_count": termination.get("model_stop", 0),
+                "max_new_tokens_count": termination.get("max_new_tokens", 0),
+                "unknown_stop_count": termination.get("unknown", 0),
+                "token_cap_hits": sum(bool(row.get("token_cap_hit")) for row in predictions),
+                "empty_outputs": sum(not response for response in responses),
+                "malformed_outputs": sum(not isinstance(row.get("response"), str) for row in predictions),
+                "repeated_outputs_beyond_first": repeated,
+                "possible_unfinished_outputs": unfinished,
+                "completion_tokens_min": min(token_counts) if token_counts else 0,
+                "completion_tokens_median": percentile(token_counts, 0.5) if token_counts else 0,
+                "completion_tokens_p95": percentile(token_counts, 0.95) if token_counts else 0,
+                "completion_tokens_max": max(token_counts) if token_counts else 0,
+                "words_median": percentile(word_counts, 0.5) if word_counts else 0,
+                "words_p95": percentile(word_counts, 0.95) if word_counts else 0,
+                "candidate_reference_word_ratio": (
+                    sum(word_counts) / reference_words if reference_words else None
+                ),
+                "peak_gpu_memory_allocated_bytes": max(
+                    (int(row.get("peak_gpu_memory_allocated_bytes") or 0) for row in predictions),
+                    default=0,
+                ),
+                "peak_gpu_memory_reserved_bytes": max(
+                    (int(row.get("peak_gpu_memory_reserved_bytes") or 0) for row in predictions),
+                    default=0,
+                ),
+            }
+        )
+    return rows
+
+
 def analyze_deepsdo(
     protocol: PaperProtocol,
     records: Sequence[Mapping[str, Any]],
@@ -691,6 +811,7 @@ def analyze_deepsdo(
     records_sha256: str,
     *,
     paper_mode: bool,
+    condition_id: str | None = None,
 ) -> Dict[str, Any]:
     scored: Dict[str, list[Dict[str, Any]]] = {}
     aggregates: Dict[str, Dict[str, Any]] = {}
@@ -698,14 +819,46 @@ def analyze_deepsdo(
     ci_rows: list[Dict[str, Any]] = []
     metrics = ["cider", "meteor", "rouge_l", "bleu_1", "bleu_2", "bleu_3", "bleu_4"]
     all_per_sample: list[Dict[str, Any]] = []
+    predictions_by_model: Dict[str, list[Dict[str, Any]]] = {}
     for model_label in protocol.selected_models("deepsdo"):
-        predictions = _model_predictions(protocol, "deepsdo", output_root, model_label, records, records_sha256, paper_mode=paper_mode)
+        predictions = _model_predictions(
+            protocol,
+            "deepsdo",
+            output_root,
+            model_label,
+            records,
+            records_sha256,
+            paper_mode=paper_mode,
+            condition_id=condition_id,
+        )
+        predictions_by_model[model_label] = predictions
         rows, aggregate = score_caption_rows(predictions, protocol, paper_mode=paper_mode, include_sbert=False)
         scored[model_label] = rows
         aggregates[model_label] = aggregate
-        summary_rows.append(_wide_row(model_label, "caption", aggregate, metrics))
-        ci_rows.extend(metric_intervals(rows, metrics, protocol, cluster_key=None, model_label=model_label, suite="deepsdo", task="caption"))
-        all_per_sample.extend(rows)
+        summary_rows.append(
+            {
+                "condition_id": condition_id,
+                **_wide_row(model_label, "caption", aggregate, metrics),
+            }
+        )
+        ci_rows.extend(
+            {
+                "condition_id": condition_id,
+                **row,
+            }
+            for row in metric_intervals(
+                rows,
+                metrics,
+                protocol,
+                cluster_key=None,
+                model_label=model_label,
+                suite="deepsdo",
+                task="caption",
+            )
+        )
+        all_per_sample.extend(
+            {"condition_id": condition_id, **row} for row in rows
+        )
     delta_rows: list[Dict[str, Any]] = []
     declared_pairs = [
         tuple(pair)
@@ -726,17 +879,41 @@ def analyze_deepsdo(
                 suite="deepsdo", task="caption",
             )
         is_headline = (target, baseline) in declared_pairs
-        delta_rows.extend({**row, "headline_comparison": is_headline} for row in pair_rows)
+        delta_rows.extend(
+            {
+                "condition_id": condition_id,
+                **row,
+                "headline_comparison": is_headline,
+            }
+            for row in pair_rows
+        )
+    _apply_holm_adjustment(delta_rows)
     topic_rows = _subgroup_table(scored, "topic_stratum")
     channel_rows = _subgroup_table(scored, "channel")
     modality_rows = _subgroup_table(scored, "collapsed_modality")
+    for table in (topic_rows, channel_rows, modality_rows):
+        for row in table:
+            row["condition_id"] = condition_id
+    diagnostics = _deepsdo_completion_diagnostics(
+        predictions_by_model, condition_id
+    )
     suite_root = report_root / "deepsdo"
-    write_table_bundle(suite_root / "deepsdo_results", summary_rows, caption="Zero-shot DeepSDO caption results", label="tab:deepsdo-results", note="CIDEr is primary. DeepSDO has one reference per image; the published supervised M2 result is not an equivalent zero-shot baseline.")
-    write_table_bundle(suite_root / "deepsdo_absolute_ci", ci_rows, caption="DeepSDO paired-item bootstrap confidence intervals", label="tab:deepsdo-ci")
-    write_table_bundle(suite_root / "deepsdo_paired_differences", delta_rows, caption="DeepSDO paired model differences", label="tab:deepsdo-deltas")
-    write_table_bundle(suite_root / "deepsdo_topics", topic_rows, caption="DeepSDO descriptive topic strata", label="tab:deepsdo-topics", note="Topics are derived descriptive strata, not official class labels; n<10 rows are exploratory, and topic is confounded with wavelength.")
-    write_table_bundle(suite_root / "deepsdo_channels", channel_rows, caption="DeepSDO channel-stratified results", label="tab:deepsdo-channels")
-    write_table_bundle(suite_root / "deepsdo_modalities", modality_rows, caption="DeepSDO collapsed modality results", label="tab:deepsdo-modalities")
+    if condition_id is not None:
+        suite_root = suite_root / condition_id
+    precision = ".8g"
+    note = (
+        "CIDEr is retained for continuity and reported with significant digits. "
+        "DeepSDO has one reference per image, so near-floor CIDEr values are sensitive "
+        "to candidate/reference length mismatch and must not be interpreted as practical "
+        "superiority. The published supervised M2 result is not an equivalent zero-shot baseline."
+    )
+    write_table_bundle(suite_root / "deepsdo_results", summary_rows, caption="Zero-shot DeepSDO caption results", label="tab:deepsdo-results", note=note, float_format=precision)
+    write_table_bundle(suite_root / "deepsdo_absolute_ci", ci_rows, caption="DeepSDO paired-item bootstrap confidence intervals", label="tab:deepsdo-ci", float_format=precision)
+    write_table_bundle(suite_root / "deepsdo_paired_differences", delta_rows, caption="DeepSDO paired model differences with Holm-adjusted p-values", label="tab:deepsdo-deltas", float_format=precision)
+    write_table_bundle(suite_root / "deepsdo_completion_diagnostics", diagnostics, caption="DeepSDO generation completion and length diagnostics", label="tab:deepsdo-completion", float_format=precision)
+    write_table_bundle(suite_root / "deepsdo_topics", topic_rows, caption="DeepSDO descriptive topic strata", label="tab:deepsdo-topics", note="Topics are derived descriptive strata, not official class labels; n<10 rows are exploratory, and topic is confounded with wavelength.", float_format=precision)
+    write_table_bundle(suite_root / "deepsdo_channels", channel_rows, caption="DeepSDO channel-stratified results", label="tab:deepsdo-channels", float_format=precision)
+    write_table_bundle(suite_root / "deepsdo_modalities", modality_rows, caption="DeepSDO collapsed modality results", label="tab:deepsdo-modalities", float_format=precision)
     write_jsonl_atomic(suite_root / "deepsdo_per_sample.jsonl", all_per_sample)
     cider_plot = [
         {"label": row["model"], "estimate": row["estimate"], "lower": row["lower"], "upper": row["upper"]}
@@ -757,7 +934,15 @@ def analyze_deepsdo(
         matrix = [[lookup[(model, topic)] for model in models] for topic in topics]
         if matrix:
             plot_heatmap(matrix, topics, models, suite_root / f"deepsdo_topic_{metric}", title=f"DeepSDO topic {metric}", colorbar_label=metric, paper_mode=paper_mode)
-    return {"summary": summary_rows, "absolute_ci": ci_rows, "paired_ci": delta_rows, "topics": topic_rows, "scored": scored}
+    return {
+        "condition_id": condition_id,
+        "summary": summary_rows,
+        "absolute_ci": ci_rows,
+        "paired_ci": delta_rows,
+        "completion_diagnostics": diagnostics,
+        "topics": topic_rows,
+        "scored": scored,
+    }
 
 
 def _astro_top_level(task_key: str) -> str:
@@ -1079,21 +1264,28 @@ def _model_manifest(protocol: PaperProtocol, suites: Sequence[str]) -> list[Dict
     return rows
 
 
-def _dataset_manifest(protocol: PaperProtocol, suites: Sequence[str], records: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[Dict[str, Any]]:
+def _dataset_manifest(
+    protocol: PaperProtocol,
+    suites: Sequence[str],
+    records: Mapping[str, Sequence[Mapping[str, Any]]],
+    conditions: Mapping[str, Sequence[str | None]],
+) -> list[Dict[str, Any]]:
     rows = []
     for suite in suites:
         cfg = protocol.data["datasets"][suite]
-        rows.append(
-            {
-                "suite": suite,
-                "paper_label": cfg["paper_label"],
-                "n_records": len(records[suite]),
-                "n_images_or_objects": len({str(row.get("source_object_id")) for row in records[suite]}),
-                "evaluation_only": cfg.get("evaluation_only"),
-                "rag_used": False,
-                "protocol_hash": protocol.suite_fingerprint(suite),
-            }
-        )
+        for condition_id in conditions[suite]:
+            rows.append(
+                {
+                    "suite": suite,
+                    "condition_id": condition_id,
+                    "paper_label": cfg["paper_label"],
+                    "n_records": len(records[suite]),
+                    "n_images_or_objects": len({str(row.get("source_object_id")) for row in records[suite]}),
+                    "evaluation_only": cfg.get("evaluation_only"),
+                    "rag_used": False,
+                    "protocol_hash": protocol.suite_fingerprint(suite, condition_id),
+                }
+            )
     return rows
 
 
@@ -1143,9 +1335,17 @@ def _training_lineage_rows(protocol: PaperProtocol, suites: Sequence[str]) -> li
                 "qa_lineage": "GPT-4-generated answers documented by source project",
                 "external_benchmark_used_for_training": "unknown",
             }
-        else:
+        elif label == "qwen3_vl_4b":
             lineage = {
                 "training_dataset": "Qwen3-VL foundation/instruction data",
+                "training_dataset_revision": "not publicly auditable per example",
+                "caption_lineage": "not established per row",
+                "qa_lineage": "not established per row",
+                "external_benchmark_used_for_training": "unknown",
+            }
+        else:
+            lineage = {
+                "training_dataset": "InternVL3.5 foundation/instruction data",
                 "training_dataset_revision": "not publicly auditable per example",
                 "caption_lineage": "not established per row",
                 "qa_lineage": "not established per row",
@@ -1213,39 +1413,54 @@ def _paper_narrative(protocol: PaperProtocol, results: Mapping[str, Any]) -> str
         "All comparisons below are conditional on the frozen datasets, prompts, decoding settings, and model revisions. RAG was not used in training or evaluation.",
         "",
     ]
-    for suite, value in results.items():
-        lines.extend([f"## {suite}", ""])
-        summaries = value.get("summary", [])
-        deltas = value.get("paired_ci", [])
-        for delta in deltas:
-            if delta.get("headline_comparison") is False:
-                continue
-            target = delta.get("target")
-            baseline = delta.get("baseline")
-            metric = delta.get("metric")
-            task = delta.get("task") or delta.get("task_key") or "overall"
-            left = next((row for row in summaries if row.get("model") == target and (row.get("task") == task or row.get("task_key") == task)), None)
-            right = next((row for row in summaries if row.get("model") == baseline and (row.get("task") == task or row.get("task_key") == task)), None)
-            if left and right and left.get(metric) is not None and right.get(metric) is not None:
+    for suite, suite_value in results.items():
+        condition_values = (
+            suite_value.get("conditions", {})
+            if isinstance(suite_value, Mapping) and "conditions" in suite_value
+            else {None: suite_value}
+        )
+        for condition_id, value in condition_values.items():
+            heading = suite if condition_id is None else f"{suite} — {condition_id}"
+            lines.extend([f"## {heading}", ""])
+            if condition_id is not None:
+                config = protocol.condition_config(suite, condition_id)
                 lines.append(
-                    "- "
-                    + cautious_comparison(
-                        str(target), float(left[metric]), str(baseline), float(right[metric]),
-                        metric=str(metric), difference_ci=(float(delta["lower"]), float(delta["upper"])),
-                        scope=f"the frozen {suite} {task} evaluation",
-                    )
+                    f"Prompt: `{config['prompt']}`; maximum new tokens: "
+                    f"{config['max_new_tokens']}. Conditions are scored and interpreted separately."
                 )
-        lines.append("")
-        if suite == "deepsdo":
-            lines.append(
-                "DeepSDO topic groups are derived descriptive strata rather than class labels; topic and wavelength are confounded, and the single reference per image limits semantic coverage. The supervised published M2 model is not treated as an equivalent zero-shot baseline."
-            )
+                lines.append("")
+            summaries = value.get("summary", [])
+            deltas = value.get("paired_ci", [])
+            for delta in deltas:
+                if delta.get("headline_comparison") is False:
+                    continue
+                target = delta.get("target")
+                baseline = delta.get("baseline")
+                metric = delta.get("metric")
+                task = delta.get("task") or delta.get("task_key") or "overall"
+                left = next((row for row in summaries if row.get("model") == target and (row.get("task") == task or row.get("task_key") == task)), None)
+                right = next((row for row in summaries if row.get("model") == baseline and (row.get("task") == task or row.get("task_key") == task)), None)
+                if left and right and left.get(metric) is not None and right.get(metric) is not None:
+                    lines.append(
+                        "- "
+                        + cautious_comparison(
+                            str(target), float(left[metric]), str(baseline), float(right[metric]),
+                            metric=str(metric), difference_ci=(float(delta["lower"]), float(delta["upper"])),
+                            scope=f"the frozen {heading} {task} evaluation",
+                            precision=6,
+                        )
+                    )
             lines.append("")
-        if suite == "astrovlbench":
-            lines.append(
-                "The project summary is a transparent macro-average over the predeclared hierarchy and is not presented as an official AstroVLBench leaderboard score. Parser-invalid answers are retained as failures."
-            )
-            lines.append("")
+            if suite == "deepsdo":
+                lines.append(
+                    "DeepSDO topic groups are derived descriptive strata rather than class labels; topic and wavelength are confounded, and the single reference per image limits semantic coverage. CIDEr is retained for continuity, but near-floor values and their exact absolute differences must be interpreted alongside caption-length diagnostics. The supervised published M2 model is not treated as an equivalent zero-shot baseline."
+                )
+                lines.append("")
+            if suite == "astrovlbench":
+                lines.append(
+                    "The project summary is a transparent macro-average over the predeclared hierarchy and is not presented as an official AstroVLBench leaderboard score. Parser-invalid answers are retained as failures."
+                )
+                lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -1256,31 +1471,59 @@ def analyze_study(
     *,
     paper_mode: bool = True,
     data_root: Path | None = None,
+    conditions: Mapping[str, Sequence[str | None]] | None = None,
 ) -> Path:
     data_root = Path(data_root or protocol.data["runtime"]["data_root"])
+    condition_map = conditions or {
+        suite: list(protocol.condition_ids(suite)) for suite in suites
+    }
     records: Dict[str, list[Dict[str, Any]]] = {}
     record_hashes: Dict[str, str] = {}
     results: Dict[str, Any] = {}
+    condition_records: Dict[tuple[str, str | None], list[Dict[str, Any]]] = {}
     for suite in suites:
-        path = data_root / suite / "records.jsonl"
-        if not path.is_file():
-            raise AnalysisError(f"Missing canonical records for {suite}: {path}")
-        records[suite] = read_jsonl(path)
-        record_hashes[suite] = sha256_file(path)
+        for condition_id in condition_map[suite]:
+            path = _records_path(data_root, suite, condition_id)
+            if not path.is_file():
+                raise AnalysisError(f"Missing canonical records for {suite}: {path}")
+            unit_records = read_jsonl(path)
+            condition_records[(suite, condition_id)] = unit_records
+            records.setdefault(suite, unit_records)
+            record_hashes[_unit_key(suite, condition_id)] = sha256_file(path)
     analysis_hash = analysis_run_fingerprint(
-        protocol, suites, record_hashes, data_root
+        protocol, suites, record_hashes, data_root, conditions=condition_map
     )
     report_root = output_root / "reports" / analysis_hash[:16]
     report_root.mkdir(parents=True, exist_ok=True)
     for suite in suites:
         if suite == "internal":
-            results[suite] = analyze_internal(protocol, records[suite], output_root, report_root, record_hashes[suite], paper_mode=paper_mode)
+            results[suite] = analyze_internal(protocol, records[suite], output_root, report_root, record_hashes[_unit_key(suite, None)], paper_mode=paper_mode)
         elif suite == "deepsdo":
-            results[suite] = analyze_deepsdo(protocol, records[suite], output_root, report_root, record_hashes[suite], paper_mode=paper_mode)
+            if condition_map[suite] == [None]:
+                results[suite] = analyze_deepsdo(
+                    protocol,
+                    condition_records[(suite, None)],
+                    output_root,
+                    report_root,
+                    record_hashes[_unit_key(suite, None)],
+                    paper_mode=paper_mode,
+                )
+            else:
+                results[suite] = {"conditions": {}}
+                for condition_id in condition_map[suite]:
+                    results[suite]["conditions"][str(condition_id)] = analyze_deepsdo(
+                        protocol,
+                        condition_records[(suite, condition_id)],
+                        output_root,
+                        report_root,
+                        record_hashes[_unit_key(suite, condition_id)],
+                        paper_mode=paper_mode,
+                        condition_id=condition_id,
+                    )
         else:
-            results[suite] = analyze_astrovlbench(protocol, records[suite], output_root, report_root, record_hashes[suite], paper_mode=paper_mode)
+            results[suite] = analyze_astrovlbench(protocol, records[suite], output_root, report_root, record_hashes[_unit_key(suite, None)], paper_mode=paper_mode)
     model_rows = _model_manifest(protocol, suites)
-    dataset_rows = _dataset_manifest(protocol, suites, records)
+    dataset_rows = _dataset_manifest(protocol, suites, records, condition_map)
     split_rows = _split_manifest_rows(suites, records)
     lineage_rows = _training_lineage_rows(protocol, suites)
     leakage_rows = _leakage_summary_rows(data_root, suites)
@@ -1292,21 +1535,28 @@ def analyze_study(
         write_table_bundle(report_root / "leakage_audit", leakage_rows, caption="Dataset leakage and overlap audits", label="tab:leakage-audit", note="Candidate overlaps are reported without silently changing the frozen splits.")
     (report_root / "paper_results.md").write_text(_paper_narrative(protocol, results), encoding="utf-8")
     # Do not serialize the in-memory per-sample maps embedded for pairwise computation.
-    public_results = {
-        suite: {key: value for key, value in result.items() if key != "scored"}
-        for suite, result in results.items()
-    }
+    def without_scored(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {key: without_scored(item) for key, item in value.items() if key != "scored"}
+        if isinstance(value, list):
+            return [without_scored(item) for item in value]
+        return value
+
+    public_results = without_scored(results)
     write_json_atomic(report_root / "results.json", public_results)
     manifest = {
         "study_id": protocol.study_id,
         "protocol_sha256": protocol.fingerprint,
         "analysis_run_sha256": analysis_hash,
         "suite_analysis_hashes": {
-            suite: protocol.analysis_fingerprint(suite) for suite in suites
+            _unit_key(suite, condition_id): protocol.analysis_fingerprint(suite, condition_id)
+            for suite in suites
+            for condition_id in condition_map[suite]
         },
         "records_file_sha256": record_hashes,
         "analysis_evidence_sha256": analysis_evidence_hashes(data_root, suites),
         "suites": list(suites),
+        "conditions": {suite: list(values) for suite, values in condition_map.items()},
         "retrieval": False,
         "artifacts": checksum_tree(report_root, exclude={"results_manifest.json"}),
     }

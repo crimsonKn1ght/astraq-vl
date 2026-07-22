@@ -185,7 +185,8 @@ class PaperOrchestratorDryRunTests(unittest.TestCase):
                 "PLAN prepare internal dataset",
                 "PLAN download/verify DeepSDO",
                 "PLAN smoke then full inference: internal/astraq_stage1",
-                "PLAN smoke then full inference: deepsdo/astraq_stage1",
+                "PLAN smoke then full inference: deepsdo/original_512/astraq_stage1",
+                "PLAN smoke then full inference: deepsdo/concise_256/astraq_stage1",
                 "PLAN score, bootstrap, and render paper outputs",
                 "PLAN private/public redacted bundles",
             ):
@@ -198,6 +199,15 @@ class PaperOrchestratorDryRunTests(unittest.TestCase):
             self.assertFalse(asset_root.exists())
             self.assertFalse(data_root.exists())
             self.assertFalse(output_root.exists())
+
+    def test_runpod_wrapper_contains_recovery_hardening(self) -> None:
+        wrapper = (ROOT / "scripts" / "runpod" / "run_paper_eval.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("venv --clear --seed", wrapper)
+        self.assertIn("HF_HUB_ENABLE_HF_TRANSFER", wrapper)
+        self.assertIn("index.lock", wrapper)
+        self.assertIn("configs/paper_eval_v3.yaml", wrapper)
 
 
 if __name__ == "__main__":

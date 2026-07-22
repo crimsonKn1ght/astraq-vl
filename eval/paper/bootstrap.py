@@ -35,6 +35,7 @@ class BootstrapInterval:
     n_items: int
     n_clusters: int | None = None
     method: str = "percentile"
+    two_sided_p_value: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -183,8 +184,15 @@ def _interval(
     resampling_unit: ResamplingUnit,
     n_items: int,
     n_clusters: int | None,
+    include_two_sided_p_value: bool = False,
 ) -> BootstrapInterval:
     alpha = 1.0 - confidence
+    p_value = None
+    if include_two_sided_p_value:
+        denominator = len(replicates) + 1
+        non_positive = (sum(value <= 0.0 for value in replicates) + 1) / denominator
+        non_negative = (sum(value >= 0.0 for value in replicates) + 1) / denominator
+        p_value = min(1.0, 2.0 * min(non_positive, non_negative))
     return BootstrapInterval(
         estimate=estimate,
         lower=percentile(replicates, alpha / 2.0),
@@ -195,6 +203,7 @@ def _interval(
         resampling_unit=resampling_unit,
         n_items=n_items,
         n_clusters=n_clusters,
+        two_sided_p_value=p_value,
     )
 
 
@@ -323,6 +332,7 @@ def paired_bootstrap_ci(
         resampling_unit=resampling_unit,
         n_items=len(left),
         n_clusters=len(set(resolved_clusters)) if resolved_clusters is not None else None,
+        include_two_sided_p_value=True,
     )
 
 

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from eval.paper.assets import (
     AssetError,
     AssetRegistry,
+    download_snapshot,
     safe_extract_zip,
     verify_snapshot_revision,
     zip_member_sha256,
@@ -62,6 +66,32 @@ class PaperAssetTests(unittest.TestCase):
         registry = AssetRegistry(Path("."), {}, "0" * 64, {})
         with self.assertRaisesRegex(AssetError, "protocol hash"):
             registry.validate_model("astraq_stage1", protocol)
+
+    def test_v3_external_baselines_exclude_duplicate_weight_formats(self) -> None:
+        protocol = PaperProtocol.load(ROOT / "configs" / "paper_eval_v3.yaml")
+        for label in ("qwen3_vl_4b", "internvl3_5_4b"):
+            patterns = protocol.data["models"][label]["allow_patterns"]
+            self.assertIn("*.safetensors", patterns)
+            self.assertNotIn("*.bin", patterns)
+            self.assertNotIn("*.onnx", patterns)
+
+    def test_missing_hf_transfer_falls_back_to_standard_download(self) -> None:
+        revision = "a" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "snapshots" / revision
+            snapshot.mkdir(parents=True)
+            with mock.patch.dict(
+                os.environ, {"HF_HUB_ENABLE_HF_TRANSFER": "1"}
+            ), mock.patch.dict(sys.modules, {"hf_transfer": None}), mock.patch(
+                "huggingface_hub.snapshot_download", return_value=str(snapshot)
+            ):
+                resolved = download_snapshot(
+                    repo_id="fixture/model",
+                    revision=revision,
+                    cache_dir=tmp,
+                )
+                self.assertEqual(resolved, snapshot)
+                self.assertEqual(os.environ["HF_HUB_ENABLE_HF_TRANSFER"], "0")
 
 
 if __name__ == "__main__":

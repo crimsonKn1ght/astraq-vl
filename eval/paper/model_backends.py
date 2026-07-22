@@ -1,4 +1,4 @@
-"""Isolated, deterministic generation backends for the four paper models."""
+"""Isolated, deterministic generation backends for the paper models."""
 
 from __future__ import annotations
 
@@ -34,7 +34,66 @@ def _termination(token_ids: Sequence[int], eos_ids: int | Sequence[int] | None, 
         return "eos"
     if len(token_ids) >= cap:
         return "max_new_tokens"
-    return "stopped"
+    return "model_stop"
+
+
+def _closest_aspect_ratio(
+    aspect_ratio: float,
+    target_ratios: Sequence[tuple[int, int]],
+    width: int,
+    height: int,
+    image_size: int,
+) -> tuple[int, int]:
+    """InternVL's published deterministic dynamic-tiling selection rule."""
+
+    best = (1, 1)
+    best_difference = float("inf")
+    area = width * height
+    for ratio in target_ratios:
+        target = ratio[0] / ratio[1]
+        difference = abs(aspect_ratio - target)
+        if difference < best_difference:
+            best_difference = difference
+            best = ratio
+        elif difference == best_difference and area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+            best = ratio
+    return best
+
+
+def internvl_dynamic_preprocess(
+    image: Any,
+    *,
+    image_size: int = 448,
+    min_num: int = 1,
+    max_num: int = 12,
+    use_thumbnail: bool = True,
+) -> list[Any]:
+    """Apply the official InternVL single-image dynamic tiling algorithm."""
+
+    width, height = image.size
+    aspect_ratio = width / height
+    target_ratios = sorted(
+        {
+            (columns, rows)
+            for blocks in range(min_num, max_num + 1)
+            for columns in range(1, blocks + 1)
+            for rows in range(1, blocks + 1)
+            if min_num <= columns * rows <= max_num
+        },
+        key=lambda ratio: ratio[0] * ratio[1],
+    )
+    columns, rows = _closest_aspect_ratio(
+        aspect_ratio, target_ratios, width, height, image_size
+    )
+    resized = image.resize((image_size * columns, image_size * rows))
+    tiles = []
+    for index in range(columns * rows):
+        left = (index % columns) * image_size
+        top = (index // columns) * image_size
+        tiles.append(resized.crop((left, top, left + image_size, top + image_size)))
+    if use_thumbnail and len(tiles) > 1:
+        tiles.append(image.resize((image_size, image_size)))
+    return tiles
 
 
 def _text_sha256(value: str) -> str:
@@ -327,6 +386,134 @@ class AstroLLaVAPaperBackend:
         )
 
 
+class InternVL35PaperBackend:
+    def __init__(
+        self,
+        protocol: PaperProtocol,
+        model_label: str,
+        registry: AssetRegistry,
+        device: str,
+    ) -> None:
+        import torch
+        import transformers
+
+        self.torch = torch
+        self.device = device
+        self.model_config = protocol.data["models"][model_label]
+        self.image_size = int(self.model_config.get("image_size", 448))
+        self.max_image_tiles = int(self.model_config.get("max_image_tiles", 12))
+        path = registry.model_path(model_label)
+        kwargs: Dict[str, Any] = {
+            "torch_dtype": torch.bfloat16,
+            "low_cpu_mem_usage": True,
+            "trust_remote_code": True,
+            "local_files_only": True,
+        }
+        if device.startswith("cuda"):
+            kwargs["device_map"] = "auto"
+        self.model = transformers.AutoModel.from_pretrained(str(path), **kwargs)
+        if not device.startswith("cuda"):
+            self.model = self.model.to(device)
+        self.model.eval()
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+            str(path),
+            trust_remote_code=True,
+            use_fast=False,
+            local_files_only=True,
+        )
+        template_contract = json.dumps(
+            {
+                "template": getattr(self.model.config, "template", None),
+                "image_size": self.image_size,
+                "max_image_tiles": self.max_image_tiles,
+                "question_contract": "<image>\\n{TASK_PROMPT}",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self.template_sha256 = _text_sha256(template_contract)
+
+    def _pixel_values(self, image_path: str | Path) -> Any:
+        from PIL import Image
+        from torchvision import transforms
+        from torchvision.transforms.functional import InterpolationMode
+
+        image = Image.open(image_path).convert("RGB")
+        transform = transforms.Compose(
+            [
+                transforms.Lambda(lambda value: value.convert("RGB")),
+                transforms.Resize(
+                    (self.image_size, self.image_size),
+                    interpolation=InterpolationMode.BICUBIC,
+                ),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=(0.485, 0.456, 0.406),
+                    std=(0.229, 0.224, 0.225),
+                ),
+            ]
+        )
+        tiles = internvl_dynamic_preprocess(
+            image,
+            image_size=self.image_size,
+            max_num=self.max_image_tiles,
+            use_thumbnail=True,
+        )
+        return self.torch.stack([transform(tile) for tile in tiles])
+
+    def generate(self, record: Mapping[str, Any], max_new_tokens: int) -> GenerationOutput:
+        prompt = str(record["prompt"])
+        question = f"<image>\n{prompt}"
+        pixel_values = self._pixel_values(record["image_path"]).to(
+            device=getattr(self.model, "device", self.device),
+            dtype=self.torch.bfloat16,
+        )
+        generation_config = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": False,
+            "num_beams": 1,
+        }
+        with self.torch.inference_mode():
+            response = self.model.chat(
+                self.tokenizer,
+                pixel_values,
+                question,
+                generation_config,
+                history=None,
+                return_history=False,
+            )
+        if isinstance(response, tuple):
+            response = response[0]
+        response_text = str(response).strip()
+        # The pinned public chat API returns text rather than the raw generation
+        # tensor. Re-tokenizing the returned text is deterministic and is
+        # explicitly marked in the evidence row.
+        completion = [
+            int(value)
+            for value in self.tokenizer.encode(response_text, add_special_tokens=False)
+        ]
+        eos = getattr(self.model.generation_config, "eos_token_id", None)
+        return GenerationOutput(
+            response=response_text,
+            raw_response=response_text,
+            generated_token_ids=completion,
+            prompt_token_count=len(
+                self.tokenizer.encode(question, add_special_tokens=False)
+            ),
+            termination_reason=_termination(completion, eos, max_new_tokens),
+            rendered_prompt=question,
+            template_source="internvl35_remote_chat_official",
+            template_sha256=self.template_sha256,
+            extra={
+                "generated_token_ids_source": "retokenized_native_chat_response",
+                "image_size": self.image_size,
+                "max_image_tiles": self.max_image_tiles,
+                "image_tiles": int(pixel_values.shape[0]),
+            },
+        )
+
+
 def create_backend(
     protocol: PaperProtocol,
     model_label: str,
@@ -340,4 +527,6 @@ def create_backend(
         return Qwen3VLPaperBackend(protocol, model_label, registry, device)
     if backend == "astrollava":
         return AstroLLaVAPaperBackend(protocol, model_label, registry, device)
+    if backend == "internvl":
+        return InternVL35PaperBackend(protocol, model_label, registry, device)
     raise ValueError(f"Unsupported paper backend: {backend}")

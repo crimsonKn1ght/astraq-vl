@@ -160,6 +160,30 @@ class OptionalMetricAdapterTests(TestCase):
         self.assertAlmostEqual(result["meteor"]["value"], 0.3656883036880605, places=10)
         self.assertAlmostEqual(result["rouge"]["value"], 0.689353275206188, places=10)
 
+    @unittest.skipUnless(
+        importlib.util.find_spec("pycocoevalcap") is not None,
+        "pinned optional COCO scorer is not installed",
+    )
+    def test_cider_reasonableness_for_exact_unrelated_and_long_captions(self) -> None:
+        references = [
+            "bright active region on the solar disk",
+            "dark coronal hole near the pole",
+            "long filament crossing the sun",
+        ]
+        exact = coco_cider_scores(references, references, paper_mode=True)
+        unrelated = coco_cider_scores(
+            ["galaxy spectrum redshift", "radio jet quasar", "spiral arms galaxy"],
+            references,
+            paper_mode=True,
+        )
+        long = coco_cider_scores(
+            [f"{reference} " + "unsupported detail " * 30 for reference in references],
+            references,
+            paper_mode=True,
+        )
+        self.assertGreater(float(exact["value"]), float(unrelated["value"]))
+        self.assertGreater(float(exact["value"]), float(long["value"]))
+
 
 if __name__ == "__main__":
     main()

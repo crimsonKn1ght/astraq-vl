@@ -24,7 +24,14 @@ from decode_utils import response_leak_flags
 from .protocol import canonical_json, sha256_json
 
 
-TECHNICAL_FAILURES = {"missing", "empty", "generation_error", "decode_leak", "duplicate"}
+TECHNICAL_FAILURES = {
+    "missing",
+    "empty",
+    "generation_error",
+    "decode_leak",
+    "token_cap",
+    "duplicate",
+}
 REFERENCE_FIELDS = {
     "answer",
     "answers",
@@ -158,6 +165,7 @@ _PUBLIC_SENSITIVE_FILENAME_TOKENS = {
     "gated",
     "label",
     "labels",
+    "private",
     "reference",
     "references",
     "source",
@@ -260,6 +268,10 @@ def technical_status(row: Mapping[str, Any], prompt: str | None = None) -> tuple
     response = str(row.get("response") or "").strip()
     if not response:
         return "empty", []
+    if row.get("require_natural_termination") and (
+        row.get("termination_reason") == "max_new_tokens" or row.get("token_cap_hit")
+    ):
+        return "token_cap", []
     flags = list(row.get("leak_flags") or row.get("leak_flag") or [])
     if not flags:
         flags = response_leak_flags(response, prompt)
@@ -514,6 +526,10 @@ def environment_manifest(repo_root: str | Path) -> Dict[str, Any]:
         "platform": platform.platform(),
         "git": git_state(repo_root),
         "retrieval": False,
+        "huggingface_transfer": {
+            "HF_HUB_ENABLE_HF_TRANSFER": os.environ.get("HF_HUB_ENABLE_HF_TRANSFER"),
+            "HF_HUB_DISABLE_XET": os.environ.get("HF_HUB_DISABLE_XET"),
+        },
     }
     try:
         freeze = subprocess.check_output(
@@ -686,6 +702,8 @@ def _public_file_allowed(relative: Path) -> bool:
     if suffix in _PUBLIC_FORBIDDEN_SUFFIXES:
         return False
     stem_tokens = set(_normalise_field_name(relative.stem).split("_"))
+    if "private" in stem_tokens:
+        return False
     if (
         suffix not in _PUBLIC_STRUCTURED_REDACTION_SUFFIXES
         and stem_tokens & _PUBLIC_SENSITIVE_FILENAME_TOKENS

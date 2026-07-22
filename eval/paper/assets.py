@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import tempfile
+import warnings
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -55,6 +56,16 @@ def download_snapshot(
     allow_patterns: Sequence[str] | None = None,
     token: str | None = None,
 ) -> Path:
+    if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER") == "1":
+        try:
+            import hf_transfer  # noqa: F401
+        except ImportError:
+            warnings.warn(
+                "HF_HUB_ENABLE_HF_TRANSFER=1 but hf_transfer is unavailable; "
+                "falling back to standard Hugging Face downloads.",
+                RuntimeWarning,
+            )
+            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:
@@ -265,7 +276,7 @@ def materialize_model_assets(
             entry["planned"] = True
             entries[label] = entry
             continue
-        patterns = None
+        patterns = list(model.get("allow_patterns") or []) or None
         if label == "astraq_stage1":
             patterns = [model["checkpoint_file"]]
         elif label == "astraq_stage2":
@@ -278,6 +289,10 @@ def materialize_model_assets(
         )
         entry["snapshot_path"] = str(snapshot)
         entry["resolved_revision"] = verify_snapshot_revision(snapshot, model["revision"])
+        entry["allow_patterns"] = patterns
+        entry["snapshot_bytes"] = sum(
+            path.stat().st_size for path in snapshot.rglob("*") if path.is_file()
+        )
         if label == "astraq_stage1":
             archive = snapshot / model["checkpoint_file"]
             verify_file(archive, model["checkpoint_sha256"], "Stage-1 epoch-3 archive")
@@ -349,11 +364,18 @@ def materialize_model_assets(
                 repo_id=spec["repo_id"],
                 revision=spec["revision"],
                 cache_dir=cache_dir,
+                allow_patterns=spec.get("allow_patterns"),
             )
             shared_entry.update(
                 {
                     "snapshot_path": str(snapshot),
                     "resolved_revision": verify_snapshot_revision(snapshot, spec["revision"]),
+                    "allow_patterns": spec.get("allow_patterns"),
+                    "snapshot_bytes": sum(
+                        path.stat().st_size
+                        for path in snapshot.rglob("*")
+                        if path.is_file()
+                    ),
                 }
             )
         shared_assets[key] = shared_entry

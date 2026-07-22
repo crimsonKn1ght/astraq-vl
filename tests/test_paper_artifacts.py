@@ -69,6 +69,28 @@ class PaperArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ArtifactError, "protocol"):
                 store.append(row)
 
+    def test_natural_termination_contract_rejects_cap_hits(self) -> None:
+        record = {**self.records[0], "require_natural_termination": True}
+        row = build_attempt(
+            record=record,
+            model_label="model",
+            model_revision="d" * 40,
+            backend="fixture",
+            run_id="run",
+            suite_protocol_hash="e" * 64,
+            model_protocol_hash=self.model_hash,
+            response="unfinished output",
+            termination_reason="max_new_tokens",
+            extra={"token_cap_hit": True, "require_natural_termination": True},
+        )
+        self.assertEqual(row["status"], "token_cap")
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PredictionStore(tmp, [record], self.model_hash)
+            store.append(row)
+            report = store.validate()
+            self.assertFalse(report.complete)
+            self.assertEqual(report.failed, {"one": "token_cap"})
+
     def test_truncated_last_attempt_is_ignored_for_resume(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = PredictionStore(tmp, self.records, self.model_hash)
@@ -182,6 +204,24 @@ class PaperArtifactTests(unittest.TestCase):
                     if archive.getmember(name).isfile()
                 )
                 self.assertNotIn("licensed DeepSDO caption", public_payload)
+
+    def test_blinded_audit_private_key_is_not_public(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "run"
+            audit = root / "factuality_audit"
+            audit.mkdir(parents=True)
+            (audit / "private_key.json").write_text(
+                json.dumps({"audit-id": {"model_label": "hidden-model"}}),
+                encoding="utf-8",
+            )
+            (audit / "summary.json").write_text(
+                json.dumps({"complete": True, "score": 1.0}), encoding="utf-8"
+            )
+            public = create_bundle(root, Path(tmp) / "public.tar.gz", public=True)
+            with tarfile.open(public, "r:gz") as archive:
+                names = archive.getnames()
+            self.assertFalse(any(name.endswith("private_key.json") for name in names))
+            self.assertTrue(any(name.endswith("summary.json") for name in names))
 
     def test_gated_astro_rows_drop_reversible_ids_fingerprints_and_error_paths(self) -> None:
         redacted = redact_value(

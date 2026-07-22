@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import tarfile
 import tempfile
 import unittest
@@ -182,11 +183,12 @@ class TinyPaperEndToEndFixtureTests(unittest.TestCase):
         suite: str,
         records_path: Path,
         records: list[dict],
+        condition_id: str | None = None,
     ) -> None:
         records_hash = sha256_file(records_path)
         for model_label, model in protocol.selected_models(suite).items():
             directory = protocol.model_output_dir(
-                suite, model_label, records_hash, ROOT, output_root
+                suite, model_label, records_hash, ROOT, output_root, condition_id
             )
             predictions = []
             for record in records:
@@ -215,8 +217,9 @@ class TinyPaperEndToEndFixtureTests(unittest.TestCase):
                 directory / "run_manifest.json",
                 {
                     "model_protocol_hash": protocol.effective_model_fingerprint(
-                        suite, model_label, records_hash, ROOT
+                        suite, model_label, records_hash, ROOT, condition_id
                     ),
+                    "condition_id": condition_id,
                     "records_file_sha256": records_hash,
                     "predictions_sha256": sha256_file(predictions_path),
                     "completion": {"complete": True, "expected": len(records)},
@@ -308,6 +311,70 @@ class TinyPaperEndToEndFixtureTests(unittest.TestCase):
                         for name in archive.getnames()
                     )
                 )
+
+    def test_v3_deepsdo_conditions_are_analyzed_separately(self) -> None:
+        source = PaperProtocol.load(ROOT / "configs" / "paper_eval_v3.yaml")
+        data = copy.deepcopy(source.data)
+        data["statistics"]["bootstrap_replicates"] = 5
+        protocol = PaperProtocol(source.path, data)
+        base_record = self._records()["deepsdo"][0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "datasets"
+            output_root = root / "outputs"
+            for condition_id in protocol.condition_ids("deepsdo"):
+                condition = protocol.condition_config("deepsdo", condition_id)
+                records = [
+                    {
+                        **base_record,
+                        "condition_id": condition_id,
+                        "prompt": condition["prompt"],
+                        "require_natural_termination": True,
+                    }
+                ]
+                records_path = (
+                    data_root
+                    / "deepsdo"
+                    / "conditions"
+                    / str(condition_id)
+                    / "records.jsonl"
+                )
+                write_jsonl_atomic(records_path, records)
+                self._write_completed_predictions(
+                    protocol,
+                    output_root,
+                    "deepsdo",
+                    records_path,
+                    records,
+                    condition_id,
+                )
+            with mock.patch(
+                "eval.paper.analysis.score_caption_rows", side_effect=_fake_caption_scores
+            ), mock.patch(
+                "eval.paper.analysis.plot_estimates", side_effect=_fake_plot
+            ), mock.patch(
+                "eval.paper.analysis.plot_heatmap", side_effect=_fake_plot
+            ):
+                report = analyze_study(
+                    protocol,
+                    ("deepsdo",),
+                    output_root,
+                    paper_mode=True,
+                    data_root=data_root,
+                )
+            for condition_id in protocol.condition_ids("deepsdo"):
+                condition_root = report / "deepsdo" / str(condition_id)
+                self.assertTrue((condition_root / "deepsdo_results.json").is_file())
+                self.assertTrue(
+                    (condition_root / "deepsdo_completion_diagnostics.csv").is_file()
+                )
+            manifest = json.loads(
+                (report / "results_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                manifest["conditions"]["deepsdo"],
+                ["original_512", "concise_256"],
+            )
 
 
 if __name__ == "__main__":

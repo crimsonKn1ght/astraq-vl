@@ -130,8 +130,13 @@ def seed_everything(seed: int) -> None:
         pass
 
 
-def max_tokens(protocol: PaperProtocol, suite: str, record: Mapping[str, Any]) -> int:
-    settings = protocol.data["generation"][suite]
+def max_tokens(
+    protocol: PaperProtocol,
+    suite: str,
+    record: Mapping[str, Any],
+    condition_id: str | None = None,
+) -> int:
+    settings = protocol.condition_config(suite, condition_id)
     if suite == "internal":
         key = "caption_max_new_tokens" if record.get("record_type") == "caption" else "qa_max_new_tokens"
         return int(settings[key])
@@ -144,22 +149,27 @@ def validate_locked_output_path(
     model_label: str,
     records_hash: str,
     output: str | Path,
+    condition_id: str | None = None,
     *,
     repo_root: str | Path = ROOT,
 ) -> Path:
     resolved_output = Path(output).resolve()
-    try:
-        output_root = resolved_output.parents[3]
-    except IndexError as exc:
+    suite_parent = next(
+        (parent for parent in resolved_output.parents if parent.name == suite), None
+    )
+    if suite_parent is None:
         raise SystemExit(
-            f"Output directory is too shallow to match the locked run layout: {output}"
-        ) from exc
+            "Output directory does not match the locked generation fingerprint "
+            f"layout: {output}"
+        )
+    output_root = suite_parent.parent
     expected = protocol.model_output_dir(
         suite,
         model_label,
         records_hash,
         repo_root,
         output_root,
+        condition_id,
     ).resolve()
     if resolved_output != expected:
         raise SystemExit(
@@ -216,6 +226,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--protocol", default="configs/paper_eval_v2.yaml")
     parser.add_argument("--suite", required=True, choices=["internal", "deepsdo", "astrovlbench"])
     parser.add_argument("--model", required=True)
+    parser.add_argument("--condition", default=None)
     parser.add_argument("--records", required=True)
     parser.add_argument("--asset-manifest", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -242,6 +253,10 @@ def main() -> None:
     model = protocol.selected_models(args.suite).get(args.model)
     if model is None:
         raise SystemExit(f"{args.model!r} is not enabled for {args.suite!r}")
+    if args.condition not in protocol.condition_ids(args.suite):
+        raise SystemExit(
+            f"Condition {args.condition!r} is not enabled for {args.suite!r}"
+        )
     records = read_jsonl(args.records)
     if not records:
         raise SystemExit("No canonical evaluation records were loaded")
@@ -252,12 +267,14 @@ def main() -> None:
         )
     output = Path(args.output_dir)
     records_hash = sha256_file(args.records)
-    base_model_hash = protocol.model_fingerprint(args.suite, args.model)
-    model_hash = protocol.effective_model_fingerprint(
-        args.suite, args.model, records_hash, ROOT
+    base_model_hash = protocol.model_fingerprint(
+        args.suite, args.model, args.condition
     )
-    suite_hash = protocol.suite_fingerprint(args.suite)
-    analysis_hash = protocol.analysis_fingerprint(args.suite)
+    model_hash = protocol.effective_model_fingerprint(
+        args.suite, args.model, records_hash, ROOT, args.condition
+    )
+    suite_hash = protocol.suite_fingerprint(args.suite, args.condition)
+    analysis_hash = protocol.analysis_fingerprint(args.suite, args.condition)
     environment_spec = protocol.data["environments"][model["environment"]]
     runtime_environment = generation_environment(environment_spec, args.device)
     validate_generation_environment(environment_spec, runtime_environment)
@@ -279,6 +296,7 @@ def main() -> None:
         args.model,
         records_hash,
         output,
+        args.condition,
     )
     if output.exists() and any(output.iterdir()) and not args.resume and not args.overwrite:
         raise SystemExit(f"{output} already contains a run; pass --resume or --overwrite")
@@ -287,13 +305,15 @@ def main() -> None:
 
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
-    run_id = f"{protocol.study_id}-{args.suite}-{args.model}-{model_hash[:16]}"
+    condition_fragment = f"-{args.condition}" if args.condition else ""
+    run_id = f"{protocol.study_id}-{args.suite}{condition_fragment}-{args.model}-{model_hash[:16]}"
     store = PredictionStore(output, records, model_hash)
     initial_manifest = {
         "schema_version": protocol.data["schema_version"],
         "run_id": run_id,
         "study_id": protocol.study_id,
         "suite": args.suite,
+        "condition_id": args.condition,
         "model_label": args.model,
         "model_revision": model["revision"],
         "backend": model["backend"],
@@ -371,7 +391,7 @@ def main() -> None:
     )
     if args.dry_run:
         for record in pending[:5]:
-            print(json.dumps({"id": record["id"], "image_path": record["image_path"], "max_new_tokens": max_tokens(protocol, args.suite, record)}))
+            print(json.dumps({"id": record["id"], "image_path": record["image_path"], "max_new_tokens": max_tokens(protocol, args.suite, record, args.condition)}))
         return
     if not pending:
         report = store.finalize(allow_partial=args.diagnostic_allow_partial or args.smoke)
@@ -408,13 +428,14 @@ def main() -> None:
     if args.smoke and args.suite == "deepsdo":
         synthetic_results: list[dict[str, Any]] = []
         synthetic_records = create_deepsdo_smoke_fixtures(
-            output, str(protocol.data["datasets"]["deepsdo"]["prompt"])
+            output, str(protocol.condition_config("deepsdo", args.condition)["prompt"])
         )
         for fixture in synthetic_records:
             started = time.perf_counter()
             try:
                 generated = backend.generate(
-                    fixture, int(protocol.data["generation"]["deepsdo"]["max_new_tokens"])
+                    fixture,
+                    int(protocol.condition_config("deepsdo", args.condition)["max_new_tokens"]),
                 )
                 smoke_row = build_attempt(
                     record=fixture,
@@ -435,6 +456,13 @@ def main() -> None:
                         "template_source": generated.template_source,
                         "template_sha256": generated.template_sha256,
                         "smoke_fixture": True,
+                        "condition_id": args.condition,
+                        "require_natural_termination": bool(
+                            protocol.condition_config(args.suite, args.condition).get(
+                                "require_natural_termination", False
+                            )
+                        ),
+                        "token_cap_hit": generated.termination_reason == "max_new_tokens",
                         **model_evidence,
                     },
                 )
@@ -479,8 +507,30 @@ def main() -> None:
                 image_path = Path(record["image_path"])
                 if not image_path.is_file():
                     raise FileNotFoundError(str(image_path))
-                cap = max_tokens(protocol, args.suite, record)
+                cap = max_tokens(protocol, args.suite, record, args.condition)
+                try:
+                    import torch
+
+                    if args.device.startswith("cuda") and torch.cuda.is_available():
+                        torch.cuda.reset_peak_memory_stats()
+                except ImportError:
+                    pass
                 generated = backend.generate(record, cap)
+                peak_memory: dict[str, int] = {}
+                try:
+                    import torch
+
+                    if args.device.startswith("cuda") and torch.cuda.is_available():
+                        peak_memory = {
+                            "peak_gpu_memory_allocated_bytes": int(
+                                torch.cuda.max_memory_allocated()
+                            ),
+                            "peak_gpu_memory_reserved_bytes": int(
+                                torch.cuda.max_memory_reserved()
+                            ),
+                        }
+                except ImportError:
+                    pass
                 row = build_attempt(
                     record=record,
                     model_label=args.model,
@@ -501,9 +551,16 @@ def main() -> None:
                         "template_sha256": generated.template_sha256,
                         "token_cap": cap,
                         "token_cap_hit": generated.termination_reason == "max_new_tokens",
+                        "condition_id": args.condition,
+                        "require_natural_termination": bool(
+                            protocol.condition_config(args.suite, args.condition).get(
+                                "require_natural_termination", False
+                            )
+                        ),
                         "attempt_number": attempt_number,
                         **model_evidence,
                         **generated.extra,
+                        **peak_memory,
                     },
                 )
             except Exception as exc:  # preserve evidence and continue/retry
@@ -528,7 +585,7 @@ def main() -> None:
                 f"[{position}/{len(pending)}] {record['id']} attempt={attempt_number} status={row['status']}",
                 flush=True,
             )
-            if row["status"] == "ok":
+            if row["status"] in {"ok", "token_cap"}:
                 break
     report = store.finalize(allow_partial=args.diagnostic_allow_partial or args.smoke)
     if args.smoke:

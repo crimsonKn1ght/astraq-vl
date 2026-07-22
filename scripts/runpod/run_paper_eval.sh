@@ -14,7 +14,7 @@ print_recovery() {
         has_resume=true
       fi
       case "${argument}" in
-        all|preflight|prepare|download|smoke|run|analyze|package)
+        all|preflight|prepare|download|smoke|run|analyze|audit-prepare|audit-summarize|package)
           recovery_command="${argument}"
           ;;
       esac
@@ -34,16 +34,33 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
+PROTOCOL_PATH="configs/paper_eval_v3.yaml"
+for ((index=0; index < ${#original_args[@]}; index++)); do
+  argument="${original_args[index]}"
+  if [[ "${argument}" == "--protocol" && $((index + 1)) -lt ${#original_args[@]} ]]; then
+    PROTOCOL_PATH="${original_args[index + 1]}"
+  elif [[ "${argument}" == --protocol=* ]]; then
+    PROTOCOL_PATH="${argument#--protocol=}"
+  fi
+done
+if [[ ! -f "${PROTOCOL_PATH}" ]]; then
+  echo "Protocol file does not exist: ${PROTOCOL_PATH}" >&2
+  exit 2
+fi
+
 print_wrapper_help() {
   cat <<'EOF'
 Usage: bash scripts/runpod/run_paper_eval.sh [command] [options]
 
 Commands:
-  all (default), preflight, prepare, download, smoke, run, analyze, package
+  all (default), preflight, prepare, download, smoke, run, analyze,
+  audit-prepare, audit-summarize, package
 
 Common options:
   --suites internal,deepsdo|astrovlbench
-  --models all|astraq_stage1,astraq_stage2,astrollava,qwen3_vl_4b
+  --models all|astraq_stage1,astraq_stage2,astrollava,qwen3_vl_4b,internvl3_5_4b
+  --conditions all|original_512|concise_256
+  --protocol configs/paper_eval_v3.yaml
   --resume
   --lock-astrovlbench
   --dry-run
@@ -58,7 +75,7 @@ Examples:
   HF_TOKEN=... bash scripts/runpod/run_paper_eval.sh --suites astrovlbench --models all --resume
 
 The wrapper never trains a checkpoint. A definitive paper run requires a clean
-Git worktree and the pinned environments/protocol in configs/paper_eval_v2.yaml.
+Git worktree and the pinned environments/protocol in configs/paper_eval_v3.yaml.
 EOF
 }
 
@@ -93,7 +110,7 @@ yaml_section_value() {
     $1 == section ":" {inside=1; next}
     inside && $1 == key ":" {value=$2; gsub(/^"|"$/, "", value); print value; exit}
     inside && $0 !~ /^[[:space:]]/ {inside=0}
-  ' configs/paper_eval_v2.yaml
+  ' "${PROTOCOL_PATH}"
 }
 
 configured_uv="$(yaml_section_value runtime bootstrap_uv_version)"
@@ -118,7 +135,7 @@ if [[ "${configured_uv}" != "${UV_VERSION}" || \
       "${configured_astro_torchvision}" != "${ASTRO_TORCHVISION_VERSION}" || \
       "${configured_modern_index}" != "${MODERN_TORCH_INDEX}" || \
       "${configured_astro_index}" != "${ASTRO_TORCH_INDEX}" ]]; then
-  echo "RunPod wrapper bootstrap constants do not match configs/paper_eval_v2.yaml." >&2
+  echo "RunPod wrapper bootstrap constants do not match ${PROTOCOL_PATH}." >&2
   exit 2
 fi
 
@@ -130,7 +147,7 @@ lock_requested=false
 suites_explicit=false
 for argument in "${original_args[@]}"; do
   case "${argument}" in
-    all|preflight|prepare|download|smoke|run|analyze|package) requested_command="${argument}" ;;
+    all|preflight|prepare|download|smoke|run|analyze|audit-prepare|audit-summarize|package) requested_command="${argument}" ;;
     --allow-dirty) allow_dirty=true ;;
     --skip-hardware-check) skip_hardware=true ;;
     --dry-run) dry_run=true ;;
@@ -178,8 +195,8 @@ if [[ "${allow_dirty}" == "false" && -n "$(git status --porcelain --untracked-fi
   exit 2
 fi
 if [[ "${skip_hardware}" == "false" && "${lock_only}" == "false" ]]; then
-  minimum_disk_gib="$(awk '$1 == "minimum_disk_gib:" {print $2}' configs/paper_eval_v2.yaml)"
-  minimum_ram_gib="$(awk '$1 == "minimum_ram_gib:" {print $2}' configs/paper_eval_v2.yaml)"
+  minimum_disk_gib="$(awk '$1 == "minimum_disk_gib:" {print $2}' "${PROTOCOL_PATH}")"
+  minimum_ram_gib="$(awk '$1 == "minimum_ram_gib:" {print $2}' "${PROTOCOL_PATH}")"
   available_kib="$(df -Pk "${REPO_ROOT}" | awk 'NR == 2 {print $4}')"
   total_ram_kib="$(awk '$1 == "MemTotal:" {print $2}' /proc/meminfo)"
   if (( available_kib < minimum_disk_gib * 1024 * 1024 )); then
@@ -190,15 +207,19 @@ if [[ "${skip_hardware}" == "false" && "${lock_only}" == "false" ]]; then
     echo "Insufficient RAM before setup: need ${minimum_ram_gib} GiB." >&2
     exit 2
   fi
+  echo "Disk before setup: $((available_kib / 1024 / 1024)) GiB free; protocol minimum: ${minimum_disk_gib} GiB."
+  if command -v quota >/dev/null 2>&1; then
+    quota -s 2>/dev/null || true
+  fi
 fi
 if [[ "${skip_hardware}" == "false" && "${requires_inference}" == "true" ]]; then
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     echo "nvidia-smi is required for an inference run." >&2
     exit 2
   fi
-  minimum_memory_mib="$(awk '$1 == "minimum_gpu_memory_mib:" {print $2}' configs/paper_eval_v2.yaml)"
-  minimum_capability="$(awk '$1 == "minimum_compute_capability:" {print $2}' configs/paper_eval_v2.yaml)"
-  maximum_capability="$(awk '$1 == "maximum_compute_capability_exclusive:" {print $2}' configs/paper_eval_v2.yaml)"
+  minimum_memory_mib="$(awk '$1 == "minimum_gpu_memory_mib:" {print $2}' "${PROTOCOL_PATH}")"
+  minimum_capability="$(awk '$1 == "minimum_compute_capability:" {print $2}' "${PROTOCOL_PATH}")"
+  maximum_capability="$(awk '$1 == "maximum_compute_capability_exclusive:" {print $2}' "${PROTOCOL_PATH}")"
   eligible_gpu=false
   while IFS=',' read -r memory_mib compute_capability; do
     memory_mib="${memory_mib//[[:space:]]/}"
@@ -242,10 +263,12 @@ export UV_PYTHON_INSTALL_DIR="${RUNTIME_ROOT}/python"
 
 ensure_venv() {
   target="$1"
-  if [[ -x "${target}/bin/python" && "$(${target}/bin/python -c 'import platform; print(platform.python_version())' 2>/dev/null || true)" == "${PYTHON_VERSION}" ]]; then
+  if [[ -x "${target}/bin/python" && \
+        "$(${target}/bin/python -c 'import platform; print(platform.python_version())' 2>/dev/null || true)" == "${PYTHON_VERSION}" ]] && \
+        "${target}/bin/python" -m pip --version >/dev/null 2>&1; then
     return
   fi
-  "${UV_BIN}" venv --clear --managed-python --python "${PYTHON_VERSION}" "${target}"
+  "${UV_BIN}" venv --clear --seed --managed-python --python "${PYTHON_VERSION}" "${target}"
 }
 
 ensure_venv "${MODERN_VENV}"
@@ -349,6 +372,15 @@ if [[ "${requires_generation_environment}" == "true" ]]; then
   if [[ ! -d "${ASTRO_SOURCE}/.git" ]]; then
     git clone https://github.com/UniverseTBD/AstroLLaVA.git "${ASTRO_SOURCE}"
   fi
+  astro_index_lock="${ASTRO_SOURCE}/.git/index.lock"
+  if [[ -f "${astro_index_lock}" ]]; then
+    if pgrep -af "git.*${ASTRO_SOURCE}" >/dev/null 2>&1; then
+      echo "AstroLLaVA Git index is locked by an active Git process; retry after it exits." >&2
+      exit 3
+    fi
+    echo "Removing stale lock from disposable pinned AstroLLaVA runtime clone: ${astro_index_lock}" >&2
+    rm -f -- "${astro_index_lock}"
+  fi
   git -C "${ASTRO_SOURCE}" fetch --quiet origin "${ASTRO_REVISION}"
   git -C "${ASTRO_SOURCE}" checkout --quiet --detach "${ASTRO_REVISION}"
   resolved_astro_revision="$(git -C "${ASTRO_SOURCE}" rev-parse HEAD)"
@@ -400,6 +432,12 @@ export PAPER_MODERN_PYTHON="${MODERN_VENV}/bin/python"
 export PAPER_ASTROLLAVA_PYTHON="${ASTRO_VENV}/bin/python"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=false
+
+if [[ "${HF_HUB_ENABLE_HF_TRANSFER:-0}" == "1" ]] && \
+  ! "${MODERN_VENV}/bin/python" -c 'import hf_transfer' >/dev/null 2>&1; then
+  echo "HF_HUB_ENABLE_HF_TRANSFER=1 but hf_transfer is unavailable; disabling fast transfer." >&2
+  export HF_HUB_ENABLE_HF_TRANSFER=0
+fi
 
 "${MODERN_VENV}/bin/python" -m pytest -q \
   tests/test_paper_*.py \
