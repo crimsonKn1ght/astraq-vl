@@ -91,6 +91,31 @@ class PaperArtifactTests(unittest.TestCase):
             self.assertFalse(report.complete)
             self.assertEqual(report.failed, {"one": "token_cap"})
 
+    def test_smoke_completions_accept_token_cap_but_successes_do_not(self) -> None:
+        record = {**self.records[0], "require_natural_termination": True}
+        capped = build_attempt(
+            record=record,
+            model_label="model",
+            model_revision="d" * 40,
+            backend="fixture",
+            run_id="run",
+            suite_protocol_hash="e" * 64,
+            model_protocol_hash=self.model_hash,
+            response="unfinished output",
+            termination_reason="max_new_tokens",
+            extra={"token_cap_hit": True, "require_natural_termination": True},
+        )
+        self.assertEqual(capped["status"], "token_cap")
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PredictionStore(tmp, [record], self.model_hash)
+            store.append(capped)
+            # The scored evaluation still treats the capped record as unfinished,
+            # so it stays pending and never counts as a success.
+            self.assertEqual(store.successes(), {})
+            self.assertEqual([row["id"] for row in store.pending_records()], ["one"])
+            # The smoke plumbing gate accepts it: generation ran end to end.
+            self.assertEqual(set(store.smoke_completions()), {"one"})
+
     def test_truncated_last_attempt_is_ignored_for_resume(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = PredictionStore(tmp, self.records, self.model_hash)

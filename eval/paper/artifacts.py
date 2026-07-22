@@ -32,6 +32,13 @@ TECHNICAL_FAILURES = {
     "token_cap",
     "duplicate",
 }
+# Statuses that satisfy the smoke plumbing gate. ``token_cap`` is a genuine
+# scoring failure (the natural-termination contract was violated), but it still
+# proves the generation path works end to end: the backend produced and decoded
+# tokens up to the cap. Because generation is greedy and deterministic, a
+# capped record can never turn into ``ok`` on a later resume, so gating smoke on
+# ``ok`` alone would make the preflight unsatisfiable for such records.
+SMOKE_ACCEPTABLE_STATUSES = frozenset({"ok", "token_cap"})
 REFERENCE_FIELDS = {
     "answer",
     "answers",
@@ -403,7 +410,8 @@ class PredictionStore:
             stream.flush()
             os.fsync(stream.fileno())
 
-    def successes(self) -> Dict[str, Dict[str, Any]]:
+    def _completed(self, accepted: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+        accepted = frozenset(accepted)
         result: Dict[str, Dict[str, Any]] = {}
         for row in self.attempts():
             row_id = str(row.get("id") or "")
@@ -417,9 +425,22 @@ class PredictionStore:
             ):
                 continue
             status, _ = technical_status(row, str(expected.get("prompt") or ""))
-            if status == "ok":
+            if status in accepted:
                 result[row_id] = row
         return result
+
+    def successes(self) -> Dict[str, Dict[str, Any]]:
+        return self._completed({"ok"})
+
+    def smoke_completions(self) -> Dict[str, Dict[str, Any]]:
+        """Records whose generation plumbing succeeded for smoke purposes.
+
+        Unlike :meth:`successes`, a deterministic ``token_cap`` counts here: the
+        backend generated and decoded tokens up to the cap, so the inference
+        path is verified even though the natural-termination contract flags the
+        record as a non-``ok`` outcome for the scored evaluation.
+        """
+        return self._completed(SMOKE_ACCEPTABLE_STATUSES)
 
     def pending_records(self) -> list[Dict[str, Any]]:
         done = set(self.successes())

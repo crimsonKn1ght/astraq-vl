@@ -16,6 +16,7 @@ from typing import Any, Mapping
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from eval.paper.artifacts import (  # noqa: E402
+    SMOKE_ACCEPTABLE_STATUSES,
     PredictionStore,
     build_attempt,
     environment_manifest,
@@ -493,7 +494,9 @@ def main() -> None:
             },
         )
         failed_synthetic = [
-            row["id"] for row in synthetic_results if row.get("status") != "ok"
+            row["id"]
+            for row in synthetic_results
+            if row.get("status") not in SMOKE_ACCEPTABLE_STATUSES
         ]
         if failed_synthetic:
             raise SystemExit(
@@ -589,10 +592,22 @@ def main() -> None:
                 break
     report = store.finalize(allow_partial=args.diagnostic_allow_partial or args.smoke)
     if args.smoke:
-        successful = store.successes()
-        failed_smoke = [str(record["id"]) for record in pending if str(record["id"]) not in successful]
+        completed = store.smoke_completions()
+        failed_smoke = [str(record["id"]) for record in pending if str(record["id"]) not in completed]
         if failed_smoke:
             raise SystemExit(f"Smoke generation failed for: {', '.join(failed_smoke)}")
+        capped = [
+            str(record["id"])
+            for record in pending
+            if completed.get(str(record["id"]), {}).get("status") == "token_cap"
+        ]
+        if capped:
+            print(
+                "Smoke generation reached the token cap without natural termination for: "
+                + ", ".join(capped)
+                + " (plumbing verified; these remain scoring failures in the full run)",
+                flush=True,
+            )
     final_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     final_manifest.update(
         {
