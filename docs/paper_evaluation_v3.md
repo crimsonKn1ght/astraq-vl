@@ -52,6 +52,11 @@ bash scripts/runpod/run_paper_eval.sh run \
 
 The expected generation total is 1,020 rows: 102 records × 5 models × 2 conditions. Every model/condition completion report must show 102 successful rows, no missing/failed/extra rows, and no token-cap failures.
 
+Smoke uses a deterministic stratified cohort for each model and condition. A resumed
+smoke invocation reuses completed cohort members rather than advancing to different
+benchmark rows. A `token_cap` satisfies only this smoke plumbing gate and remains a
+technical failure in the complete evaluation.
+
 ## Analysis and blinded review
 
 Run automatic scoring after generation:

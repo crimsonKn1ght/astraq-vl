@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -142,6 +142,78 @@ def max_tokens(
         key = "caption_max_new_tokens" if record.get("record_type") == "caption" else "qa_max_new_tokens"
         return int(settings[key])
     return int(settings["max_new_tokens"])
+
+
+def select_smoke_records(
+    records: Sequence[Mapping[str, Any]],
+    suite: str,
+    limit: int | None,
+) -> list[Mapping[str, Any]]:
+    """Select one deterministic smoke cohort from the complete record set."""
+
+    selected: list[Mapping[str, Any]] = []
+    seen_groups: set[Any] = set()
+    required_groups: set[Any] = set()
+    if suite == "internal":
+        required_groups = {record.get("record_type") for record in records}
+    elif suite == "astrovlbench":
+        required_groups = {record.get("task_key") for record in records}
+    for record in records:
+        if suite == "internal":
+            group = record.get("record_type")
+        elif suite == "astrovlbench":
+            group = record.get("task_key")
+        else:
+            group = (record.get("topic_stratum"), record.get("collapsed_modality"))
+        if group not in seen_groups:
+            selected.append(record)
+            seen_groups.add(group)
+        if required_groups and seen_groups == required_groups:
+            break
+        if not required_groups and len(selected) >= (limit or 5):
+            break
+    return selected
+
+
+def smoke_record_plan(
+    records: Sequence[Mapping[str, Any]],
+    suite: str,
+    limit: int | None,
+    completed: Mapping[str, Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """Return the fixed smoke cohort and only its unfinished members."""
+
+    selected = select_smoke_records(records, suite, limit)
+    pending = [
+        record for record in selected if str(record.get("id") or "") not in completed
+    ]
+    return selected, pending
+
+
+def validate_smoke_targets(
+    store: PredictionStore,
+    targets: Sequence[Mapping[str, Any]],
+) -> None:
+    completed = store.smoke_completions()
+    failed = [
+        str(record["id"])
+        for record in targets
+        if str(record["id"]) not in completed
+    ]
+    if failed:
+        raise SystemExit(f"Smoke generation failed for: {', '.join(failed)}")
+    capped = [
+        str(record["id"])
+        for record in targets
+        if completed[str(record["id"])].get("status") == "token_cap"
+    ]
+    if capped:
+        print(
+            "Smoke generation reached the token cap without natural termination for: "
+            + ", ".join(capped)
+            + " (plumbing verified; these remain scoring failures in the full run)",
+            flush=True,
+        )
 
 
 def validate_locked_output_path(
@@ -360,42 +432,35 @@ def main() -> None:
         )
         initial_manifest["resume_history"] = history
     write_json_atomic(manifest_path, initial_manifest)
-    pending = store.pending_records() if args.resume else records
+    smoke_targets: list[Mapping[str, Any]] = []
     if args.smoke:
-        selected = []
-        seen_groups = set()
-        required_groups = set()
-        if args.suite == "internal":
-            required_groups = {record.get("record_type") for record in pending}
-        elif args.suite == "astrovlbench":
-            required_groups = {record.get("task_key") for record in pending}
-        for record in pending:
-            if args.suite == "internal":
-                group = record.get("record_type")
-            elif args.suite == "astrovlbench":
-                group = record.get("task_key")
-            else:
-                group = (record.get("topic_stratum"), record.get("collapsed_modality"))
-            if group not in seen_groups:
-                selected.append(record)
-                seen_groups.add(group)
-            if required_groups and seen_groups == required_groups:
-                break
-            if not required_groups and len(selected) >= (args.limit or 5):
-                break
-        pending = selected
-    elif args.limit:
-        pending = pending[: args.limit]
-    print(
-        f"{args.suite}/{args.model}: expected={len(records)} completed={len(records)-len(pending)} "
-        f"pending={len(pending)} protocol={model_hash[:16]}"
-    )
+        completed = store.smoke_completions() if args.resume else {}
+        smoke_targets, pending = smoke_record_plan(
+            records, args.suite, args.limit, completed
+        )
+        print(
+            f"{args.suite}/{args.model}: expected={len(records)} "
+            f"successful={len(store.successes())} smoke_selected={len(smoke_targets)} "
+            f"smoke_completed={len(smoke_targets)-len(pending)} "
+            f"smoke_pending={len(pending)} protocol={model_hash[:16]}"
+        )
+    else:
+        pending = store.pending_records() if args.resume else records
+        if args.limit:
+            pending = pending[: args.limit]
+        print(
+            f"{args.suite}/{args.model}: expected={len(records)} "
+            f"successful={len(store.successes())} pending={len(pending)} "
+            f"protocol={model_hash[:16]}"
+        )
     if args.dry_run:
         for record in pending[:5]:
             print(json.dumps({"id": record["id"], "image_path": record["image_path"], "max_new_tokens": max_tokens(protocol, args.suite, record, args.condition)}))
         return
     if not pending:
         report = store.finalize(allow_partial=args.diagnostic_allow_partial or args.smoke)
+        if args.smoke:
+            validate_smoke_targets(store, smoke_targets)
         final_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         final_manifest.update(
             {
@@ -592,22 +657,7 @@ def main() -> None:
                 break
     report = store.finalize(allow_partial=args.diagnostic_allow_partial or args.smoke)
     if args.smoke:
-        completed = store.smoke_completions()
-        failed_smoke = [str(record["id"]) for record in pending if str(record["id"]) not in completed]
-        if failed_smoke:
-            raise SystemExit(f"Smoke generation failed for: {', '.join(failed_smoke)}")
-        capped = [
-            str(record["id"])
-            for record in pending
-            if completed.get(str(record["id"]), {}).get("status") == "token_cap"
-        ]
-        if capped:
-            print(
-                "Smoke generation reached the token cap without natural termination for: "
-                + ", ".join(capped)
-                + " (plumbing verified; these remain scoring failures in the full run)",
-                flush=True,
-            )
+        validate_smoke_targets(store, smoke_targets)
     final_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     final_manifest.update(
         {

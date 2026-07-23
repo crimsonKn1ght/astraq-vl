@@ -13,6 +13,7 @@ from eval.paper.model_backends import (
 )
 from scripts.paper_eval_worker import (
     create_deepsdo_smoke_fixtures,
+    smoke_record_plan,
     validate_generation_environment,
     validate_generation_hardware,
 )
@@ -111,6 +112,58 @@ class PaperModelBackendContractTests(unittest.TestCase):
             self.assertEqual(
                 {row["split"] for row in records}, {"synthetic_smoke_only"}
             )
+
+    def test_smoke_resume_keeps_fixed_cohort_instead_of_advancing(self) -> None:
+        records = [
+            {
+                "id": "one",
+                "topic_stratum": "a",
+                "collapsed_modality": "x",
+            },
+            {
+                "id": "two",
+                "topic_stratum": "a",
+                "collapsed_modality": "x",
+            },
+            {
+                "id": "three",
+                "topic_stratum": "b",
+                "collapsed_modality": "y",
+            },
+            {
+                "id": "four",
+                "topic_stratum": "b",
+                "collapsed_modality": "y",
+            },
+        ]
+        selected, pending = smoke_record_plan(
+            records,
+            "deepsdo",
+            2,
+            {
+                "one": {"status": "ok"},
+                "unselected": {"status": "ok"},
+            },
+        )
+        self.assertEqual([row["id"] for row in selected], ["one", "three"])
+        self.assertEqual([row["id"] for row in pending], ["three"])
+
+    def test_smoke_resume_treats_cached_token_cap_as_complete(self) -> None:
+        records = [
+            {
+                "id": "capped",
+                "topic_stratum": "a",
+                "collapsed_modality": "x",
+            }
+        ]
+        selected, pending = smoke_record_plan(
+            records,
+            "deepsdo",
+            1,
+            {"capped": {"status": "token_cap"}},
+        )
+        self.assertEqual([row["id"] for row in selected], ["capped"])
+        self.assertEqual(pending, [])
 
 
 if __name__ == "__main__":
