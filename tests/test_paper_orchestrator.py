@@ -185,7 +185,7 @@ class PaperOrchestratorDryRunTests(unittest.TestCase):
                 "PLAN prepare internal dataset",
                 "PLAN download/verify DeepSDO",
                 "PLAN smoke then full inference: internal/astraq_stage1",
-                "PLAN smoke then full inference: deepsdo/original_512/astraq_stage1",
+                "PLAN smoke then full inference: deepsdo/original_1024/astraq_stage1",
                 "PLAN smoke then full inference: deepsdo/concise_256/astraq_stage1",
                 "PLAN score, bootstrap, and render paper outputs",
                 "PLAN private/public redacted bundles",
@@ -207,7 +207,7 @@ class PaperOrchestratorDryRunTests(unittest.TestCase):
         self.assertIn("venv --clear --seed", wrapper)
         self.assertIn("HF_HUB_ENABLE_HF_TRANSFER", wrapper)
         self.assertIn("index.lock", wrapper)
-        self.assertIn("configs/paper_eval_v3.yaml", wrapper)
+        self.assertIn("configs/paper_eval_v4.yaml", wrapper)
 
 
 if __name__ == "__main__":

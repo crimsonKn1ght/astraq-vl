@@ -429,6 +429,13 @@ AstroLLaVA in-domain output had invalid slicing/empty rows and an unavoidable tr
 overlap. The legacy runner also now refuses to train a missing checkpoint. Use the versioned paper
 evaluation suite below for all new results.
 
+> **Current DeepSDO protocol:** use
+> [`configs/paper_eval_v4.yaml`](configs/paper_eval_v4.yaml) and
+> [`docs/paper_evaluation_v4.md`](docs/paper_evaluation_v4.md). V4 preserves the
+> concise 256-token condition and replaces v3's incomplete original-prompt
+> diagnostic with a 1,024-token ceiling after Qwen3-VL-4B reached 512 tokens
+> without EOS. V2 and v3 artifacts remain immutable.
+
 ## Paper evaluation v2 (definitive workflow)
 
 The paper suite runs a controlled Stage 1 versus Stage 2 comparison on the frozen internal set,

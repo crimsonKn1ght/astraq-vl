@@ -19,6 +19,28 @@ from . import SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSIONS
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SUPPORTED_SUITES = ("internal", "deepsdo", "astrovlbench")
+DEEPSDO_CONDITIONS_BY_SCHEMA = {
+    3: {
+        "original_512": {
+            "prompt": "Describe this solar image.",
+            "max_new_tokens": 512,
+        },
+        "concise_256": {
+            "prompt": "Describe this solar image in one concise sentence.",
+            "max_new_tokens": 256,
+        },
+    },
+    4: {
+        "original_1024": {
+            "prompt": "Describe this solar image.",
+            "max_new_tokens": 1024,
+        },
+        "concise_256": {
+            "prompt": "Describe this solar image in one concise sentence.",
+            "max_new_tokens": 256,
+        },
+    },
+}
 COMMON_GENERATION_FILES = (
     "scripts/paper_eval_worker.py",
     "eval/paper/model_backends.py",
@@ -156,12 +178,13 @@ def validate_protocol(data: Mapping[str, Any]) -> None:
     _require_sha(datasets["deepsdo"].get("archive_sha256"), "datasets.deepsdo.archive_sha256", 64)
     if schema_version >= 3:
         conditions = (generation.get("deepsdo") or {}).get("conditions")
-        if not isinstance(conditions, Mapping) or set(conditions) != {
-            "original_512",
-            "concise_256",
-        }:
+        expected_conditions = DEEPSDO_CONDITIONS_BY_SCHEMA[schema_version]
+        if not isinstance(conditions, Mapping) or set(conditions) != set(
+            expected_conditions
+        ):
             raise ProtocolError(
-                "generation.deepsdo.conditions must define original_512 and concise_256"
+                "generation.deepsdo.conditions must define exactly "
+                + ", ".join(expected_conditions)
             )
         for condition_id, condition in conditions.items():
             prompt = str(condition.get("prompt") or "").strip()
@@ -177,6 +200,27 @@ def validate_protocol(data: Mapping[str, Any]) -> None:
                 raise ProtocolError(
                     f"generation.deepsdo.conditions.{condition_id}.require_natural_termination must be true"
                 )
+            expected = expected_conditions[condition_id]
+            if prompt != expected["prompt"]:
+                raise ProtocolError(
+                    f"generation.deepsdo.conditions.{condition_id}.prompt does not match "
+                    f"the frozen schema-v{schema_version} prompt"
+                )
+            if int(condition["max_new_tokens"]) != expected["max_new_tokens"]:
+                raise ProtocolError(
+                    f"generation.deepsdo.conditions.{condition_id}.max_new_tokens must be "
+                    f"{expected['max_new_tokens']} for schema v{schema_version}"
+                )
+        audit_condition = str(
+            (_require(data, "factuality_audit", "protocol") or {}).get(
+                "condition"
+            )
+            or ""
+        )
+        if audit_condition not in conditions:
+            raise ProtocolError(
+                "factuality_audit.condition must name a frozen DeepSDO condition"
+            )
 
     for label, model in models.items():
         suites = model.get("suites") or []

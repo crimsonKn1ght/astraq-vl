@@ -708,7 +708,7 @@ def package(protocol: PaperProtocol, reports: Path, args: argparse.Namespace) ->
         required_conditions = set(protocol.condition_ids("deepsdo"))
         if set(condition_map["deepsdo"]) != required_conditions:
             raise SystemExit(
-                "A v3 paper bundle requires every frozen DeepSDO condition"
+                "A conditioned paper bundle requires every frozen DeepSDO condition"
             )
     report_root = report_output_dir(
         protocol,
@@ -824,7 +824,8 @@ def package(protocol: PaperProtocol, reports: Path, args: argparse.Namespace) ->
             )
             if deepsdo_prediction_rows != expected_total:
                 raise SystemExit(
-                    f"DeepSDO v3 has {deepsdo_prediction_rows} canonical predictions; "
+                    f"DeepSDO conditioned protocol has {deepsdo_prediction_rows} "
+                    "canonical predictions; "
                     f"expected exactly {expected_total}"
                 )
         copy_tree(report_root, current / "reports" / report_root.name)
@@ -874,7 +875,7 @@ def parse_args() -> argparse.Namespace:
             "package",
         ],
     )
-    parser.add_argument("--protocol", default="configs/paper_eval_v3.yaml")
+    parser.add_argument("--protocol", default="configs/paper_eval_v4.yaml")
     parser.add_argument("--suites", default="internal,deepsdo")
     parser.add_argument("--models", default="all")
     parser.add_argument("--conditions", default="all")

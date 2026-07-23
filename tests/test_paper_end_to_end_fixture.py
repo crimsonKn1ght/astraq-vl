@@ -312,8 +312,14 @@ class TinyPaperEndToEndFixtureTests(unittest.TestCase):
                     )
                 )
 
-    def test_v3_deepsdo_conditions_are_analyzed_separately(self) -> None:
-        source = PaperProtocol.load(ROOT / "configs" / "paper_eval_v3.yaml")
+    def _assert_deepsdo_conditions_are_analyzed_separately(
+        self,
+        version: int,
+        expected_conditions: list[str],
+    ) -> None:
+        source = PaperProtocol.load(
+            ROOT / "configs" / f"paper_eval_v{version}.yaml"
+        )
         data = copy.deepcopy(source.data)
         data["statistics"]["bootstrap_replicates"] = 5
         protocol = PaperProtocol(source.path, data)
@@ -373,8 +379,20 @@ class TinyPaperEndToEndFixtureTests(unittest.TestCase):
             )
             self.assertEqual(
                 manifest["conditions"]["deepsdo"],
-                ["original_512", "concise_256"],
+                expected_conditions,
             )
+
+    def test_v3_deepsdo_conditions_are_analyzed_separately(self) -> None:
+        self._assert_deepsdo_conditions_are_analyzed_separately(
+            3,
+            ["original_512", "concise_256"],
+        )
+
+    def test_v4_deepsdo_conditions_are_analyzed_separately(self) -> None:
+        self._assert_deepsdo_conditions_are_analyzed_separately(
+            4,
+            ["original_1024", "concise_256"],
+        )
 
 
 if __name__ == "__main__":

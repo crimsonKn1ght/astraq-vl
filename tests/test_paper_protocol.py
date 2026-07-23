@@ -116,6 +116,76 @@ class PaperProtocolTests(unittest.TestCase):
         )
         self.assertIn("einops==0.6.1", requirements.splitlines())
 
+    def test_v4_changes_only_the_original_prompt_ceiling_and_storage(self) -> None:
+        v3 = PaperProtocol.load(ROOT / "configs" / "paper_eval_v3.yaml")
+        v4 = PaperProtocol.load(ROOT / "configs" / "paper_eval_v4.yaml")
+        self.assertEqual(v4.data["schema_version"], 4)
+        self.assertEqual(v4.study_id, "astraq-vl-paper-eval-v4")
+        self.assertEqual(
+            v4.condition_ids("deepsdo"),
+            ("original_1024", "concise_256"),
+        )
+        self.assertEqual(
+            v4.condition_config("deepsdo", "original_1024"),
+            {
+                "role": "primary_continuity",
+                "prompt": "Describe this solar image.",
+                "max_new_tokens": 1024,
+                "require_natural_termination": True,
+            },
+        )
+        self.assertEqual(
+            v4.condition_config("deepsdo", "concise_256"),
+            v3.condition_config("deepsdo", "concise_256"),
+        )
+        self.assertEqual(
+            v4.data["factuality_audit"]["condition"],
+            "original_1024",
+        )
+        self.assertEqual(
+            (
+                v4.data["runtime"]["output_root"],
+                v4.data["runtime"]["data_root"],
+                v4.data["runtime"]["asset_root"],
+            ),
+            (
+                "eval_runs/paper_eval_v4",
+                "datasets/paper_eval_v4",
+                "checkpoints/paper_eval_v4",
+            ),
+        )
+        normalized_v4 = copy.deepcopy(v4.data)
+        normalized_v4["schema_version"] = 3
+        normalized_v4["study"]["id"] = v3.study_id
+        normalized_v4["runtime"].update(
+            {
+                "output_root": v3.data["runtime"]["output_root"],
+                "data_root": v3.data["runtime"]["data_root"],
+                "asset_root": v3.data["runtime"]["asset_root"],
+            }
+        )
+        original = normalized_v4["generation"]["deepsdo"]["conditions"].pop(
+            "original_1024"
+        )
+        original["max_new_tokens"] = 512
+        normalized_v4["generation"]["deepsdo"]["conditions"] = {
+            "original_512": original,
+            "concise_256": normalized_v4["generation"]["deepsdo"]["conditions"][
+                "concise_256"
+            ],
+        }
+        normalized_v4["factuality_audit"]["condition"] = "original_512"
+        self.assertEqual(normalized_v4, v3.data)
+
+    def test_v4_rejects_a_silent_ceiling_change(self) -> None:
+        protocol = PaperProtocol.load(ROOT / "configs" / "paper_eval_v4.yaml")
+        broken = copy.deepcopy(protocol.data)
+        broken["generation"]["deepsdo"]["conditions"]["original_1024"][
+            "max_new_tokens"
+        ] = 2048
+        with self.assertRaisesRegex(ProtocolError, "must be 1024"):
+            validate_protocol(broken)
+
 
 if __name__ == "__main__":
     unittest.main()

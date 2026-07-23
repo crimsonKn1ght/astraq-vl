@@ -67,13 +67,16 @@ class PaperAssetTests(unittest.TestCase):
         with self.assertRaisesRegex(AssetError, "protocol hash"):
             registry.validate_model("astraq_stage1", protocol)
 
-    def test_v3_external_baselines_exclude_duplicate_weight_formats(self) -> None:
-        protocol = PaperProtocol.load(ROOT / "configs" / "paper_eval_v3.yaml")
-        for label in ("qwen3_vl_4b", "internvl3_5_4b"):
-            patterns = protocol.data["models"][label]["allow_patterns"]
-            self.assertIn("*.safetensors", patterns)
-            self.assertNotIn("*.bin", patterns)
-            self.assertNotIn("*.onnx", patterns)
+    def test_conditioned_protocols_exclude_duplicate_weight_formats(self) -> None:
+        for version in (3, 4):
+            protocol = PaperProtocol.load(
+                ROOT / "configs" / f"paper_eval_v{version}.yaml"
+            )
+            for label in ("qwen3_vl_4b", "internvl3_5_4b"):
+                patterns = protocol.data["models"][label]["allow_patterns"]
+                self.assertIn("*.safetensors", patterns)
+                self.assertNotIn("*.bin", patterns)
+                self.assertNotIn("*.onnx", patterns)
 
     def test_missing_hf_transfer_falls_back_to_standard_download(self) -> None:
         revision = "a" * 40

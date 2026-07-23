@@ -1,5 +1,10 @@
 # Paper evaluation v3
 
+> **Superseded before full inference.** Qwen3-VL-4B reached the
+> `original_512` ceiling without EOS on `deepsdo_test_0036`. V3 is retained as
+> immutable diagnostic evidence; use
+> [`paper_evaluation_v4.md`](paper_evaluation_v4.md) for the executable successor.
+
 Version 3 is an immutable follow-up to the completed v2 evaluation. It never trains or tunes a checkpoint, and it writes only below `eval_runs/paper_eval_v3`, `datasets/paper_eval_v3`, and `checkpoints/paper_eval_v3`. Existing v2 evidence remains unchanged.
 
 ## Frozen DeepSDO design

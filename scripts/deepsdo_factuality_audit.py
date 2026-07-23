@@ -81,7 +81,7 @@ def prepare_audit(
     repo_root: Path,
 ) -> Path:
     config = protocol.data.get("factuality_audit") or {}
-    condition_id = str(config.get("condition") or "original_512")
+    condition_id = str(config["condition"])
     seed = int(config.get("seed", 42))
     sample_size = int(config.get("images", 30))
     records_path = _records_path(data_root, condition_id)

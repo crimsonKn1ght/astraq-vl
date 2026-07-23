@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-PROTOCOL_PATH="configs/paper_eval_v3.yaml"
+PROTOCOL_PATH="configs/paper_eval_v4.yaml"
 for ((index=0; index < ${#original_args[@]}; index++)); do
   argument="${original_args[index]}"
   if [[ "${argument}" == "--protocol" && $((index + 1)) -lt ${#original_args[@]} ]]; then
@@ -59,8 +59,8 @@ Commands:
 Common options:
   --suites internal,deepsdo|astrovlbench
   --models all|astraq_stage1,astraq_stage2,astrollava,qwen3_vl_4b,internvl3_5_4b
-  --conditions all|original_512|concise_256
-  --protocol configs/paper_eval_v3.yaml
+  --conditions all|original_1024|concise_256
+  --protocol configs/paper_eval_v4.yaml
   --resume
   --lock-astrovlbench
   --dry-run
@@ -75,7 +75,7 @@ Examples:
   HF_TOKEN=... bash scripts/runpod/run_paper_eval.sh --suites astrovlbench --models all --resume
 
 The wrapper never trains a checkpoint. A definitive paper run requires a clean
-Git worktree and the pinned environments/protocol in configs/paper_eval_v3.yaml.
+Git worktree and the pinned environments/protocol in configs/paper_eval_v4.yaml.
 EOF
 }
 

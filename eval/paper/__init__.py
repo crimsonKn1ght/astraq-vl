@@ -5,5 +5,5 @@ packages are imported only by the worker that needs them, so protocol checks,
 artifact validation, and report generation can run on a CPU-only machine.
 """
 
-SCHEMA_VERSION = 3
-SUPPORTED_SCHEMA_VERSIONS = (2, 3)
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSIONS = (2, 3, 4)
