@@ -107,6 +107,15 @@ class PaperProtocolTests(unittest.TestCase):
             "dbf19f04a6a6f2fb15821cc7ae738430a3580cf5",
         )
 
+    def test_v3_internvl_runtime_dependency_is_locked(self) -> None:
+        protocol = PaperProtocol.load(ROOT / "configs" / "paper_eval_v3.yaml")
+        packages = protocol.data["environments"]["modern_generation"]["packages"]
+        self.assertEqual(packages["einops"], "0.6.1")
+        requirements = (ROOT / "requirements-paper-modern.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("einops==0.6.1", requirements.splitlines())
+
 
 if __name__ == "__main__":
     unittest.main()
